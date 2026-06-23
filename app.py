@@ -1,14 +1,17 @@
 from datetime import datetime
-from pathlib import Path
-import sqlite3
-
 import streamlit as st
+from supabase import create_client, Client
 
+# Load Supabase credentials from secrets
+SUPABASE_URL = st.secrets.get("SUPABASE_URL")
+SUPABASE_ANON_KEY = st.secrets.get("SUPABASE_ANON_KEY")
 
-BASE_DIR = Path(__file__).resolve().parent
-OUTPUT_DIR = BASE_DIR / "output"
-PORTFOLIO_CSV = OUTPUT_DIR / "portfolio.csv"
-DB_FILE = OUTPUT_DIR / "trades_archive.db"
+if not SUPABASE_URL or not SUPABASE_ANON_KEY:
+    st.error("Missing SUPABASE_URL or SUPABASE_ANON_KEY in .streamlit/secrets.toml")
+    st.stop()
+
+# Initialize Supabase client
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 
 def add_action_log(status, action, symbol, quantity, price, message):
@@ -32,196 +35,133 @@ def add_action_log(status, action, symbol, quantity, price, message):
     st.session_state.action_log = st.session_state.action_log[:25]
 
 
-def init_storage():
-    """Ensures output folder, active lot CSV, and archive DB exist."""
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+def auth_ui():
+    """Displays login/signup UI and manages authentication state."""
+    if "user" not in st.session_state:
+        st.session_state.user = None
 
-    if not PORTFOLIO_CSV.exists():
-        with open(PORTFOLIO_CSV, "w", encoding="utf-8") as f:
-            f.write("Symbol,Quantity,Buy_Price,Buy_Timestamp,Last_Updated\n")
+    if st.session_state.user:
+        return st.session_state.user
 
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS permanent_ledger (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            symbol TEXT,
-            action TEXT,
-            quantity INTEGER,
-            price REAL,
-            avg_buy_price REAL,
-            realized_pl REAL
-        )
-        """
-    )
-    conn.commit()
-    conn.close()
+    st.markdown("### Authentication")
+    auth_tab1, auth_tab2 = st.tabs(["Login", "Sign Up"])
 
+    with auth_tab1:
+        email = st.text_input("Email", key="login_email")
+        password = st.text_input("Password", type="password", key="login_password")
 
-def rebuild_active_lots_from_db():
-    """Reconstructs active lots from DB using lowest-buy-first sell matching."""
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        """
-        SELECT id, timestamp, symbol, action, quantity, price
-        FROM permanent_ledger
-        ORDER BY id ASC
-        """
-    )
-    rows = c.fetchall()
-    conn.close()
+        if st.button("Log In", key="login_button"):
+            try:
+                response = supabase.auth.sign_in_with_password(email, password)
+                st.session_state.user = response.user
+                st.session_state.access_token = response.session.access_token
+                st.rerun()
+            except Exception as e:
+                st.error(f"Login failed: {str(e)}")
 
-    lots = []
-    for _row_id, ts, symbol, action, qty, price in rows:
-        action_upper = (action or "").upper()
+    with auth_tab2:
+        email = st.text_input("Email", key="signup_email")
+        password = st.text_input("Password", type="password", key="signup_password")
 
-        if action_upper == "BUY":
-            lots.append(
-                {
-                    "symbol": symbol,
-                    "quantity": int(qty),
-                    "buy_price": float(price),
-                    "buy_timestamp": ts,
-                    "last_updated": ts,
-                }
-            )
-            continue
+        if st.button("Sign Up", key="signup_button"):
+            try:
+                response = supabase.auth.sign_up(email, password)
+                st.success("Sign up successful! Please check your email to confirm.")
+            except Exception as e:
+                st.error(f"Sign up failed: {str(e)}")
 
-        if action_upper == "SELL":
-            remaining = int(qty)
-            for lot in sorted(
-                [l for l in lots if l["symbol"] == symbol and l["quantity"] > 0],
-                key=lambda x: (x["buy_price"], x["buy_timestamp"]),
-            ):
-                if remaining <= 0:
-                    break
-                consumed = min(lot["quantity"], remaining)
-                lot["quantity"] -= consumed
-                lot["last_updated"] = ts
-                remaining -= consumed
-
-    return [lot for lot in lots if lot["quantity"] > 0]
+    return None
 
 
 def load_portfolio():
-    """Reads active lots from CSV; auto-migrates old aggregated CSV if found."""
-    lots = []
-    if not PORTFOLIO_CSV.exists():
-        return lots
+    """Reads active lots from Supabase portfolio table for current user."""
+    if not st.session_state.get("user"):
+        return []
 
-    with open(PORTFOLIO_CSV, "r", encoding="utf-8") as f:
-        lines = f.readlines()
-        if len(lines) <= 1:
-            return lots
-
-        header = lines[0].strip()
-
-        if header == "Symbol,Quantity,Avg_Price,Last_Updated":
-            rebuilt_lots = rebuild_active_lots_from_db()
-            if rebuilt_lots:
-                save_portfolio(rebuilt_lots)
-                return rebuilt_lots
-
-            for line in lines[1:]:
-                line = line.strip()
-                if not line:
-                    continue
-                symbol, qty, avg_price, last_updated = line.split(",")
-                lots.append(
-                    {
-                        "symbol": symbol,
-                        "quantity": int(qty),
-                        "buy_price": float(avg_price),
-                        "buy_timestamp": last_updated,
-                        "last_updated": last_updated,
-                    }
-                )
-            return lots
-
-        for line in lines[1:]:
-            line = line.strip()
-            if not line:
-                continue
-            parts = line.split(",")
-            if len(parts) == 6:
-                _, symbol, qty, buy_price, buy_timestamp, last_updated = parts
-            elif len(parts) == 5:
-                symbol, qty, buy_price, buy_timestamp, last_updated = parts
-            else:
-                continue
-
-            lots.append(
-                {
-                    "symbol": symbol,
-                    "quantity": int(qty),
-                    "buy_price": float(buy_price),
-                    "buy_timestamp": buy_timestamp,
-                    "last_updated": last_updated,
-                }
-            )
-
-    return lots
+    try:
+        user_id = st.session_state.user.id
+        response = supabase.table("portfolio").select("*").eq("user_id", user_id).execute()
+        return response.data if response.data else []
+    except Exception as e:
+        st.error(f"Failed to load portfolio: {str(e)}")
+        return []
 
 
-def save_portfolio(portfolio):
-    """Writes active lots to CSV (one row per lot)."""
-    with open(PORTFOLIO_CSV, "w", encoding="utf-8") as f:
-        f.write("Symbol,Quantity,Buy_Price,Buy_Timestamp,Last_Updated\n")
-        for lot in sorted(portfolio, key=lambda x: (x["symbol"], x["buy_timestamp"])):
-            f.write(
-                f"{lot['symbol']},{lot['quantity']},{lot['buy_price']:.2f},{lot['buy_timestamp']},{lot['last_updated']}\n"
-            )
+def save_portfolio_row(lot):
+    """Inserts or updates a single lot in Supabase portfolio table."""
+    if not st.session_state.get("user"):
+        return False
+
+    try:
+        user_id = st.session_state.user.id
+        lot_with_user = {**lot, "user_id": user_id}
+
+        # Try to update if it exists, otherwise insert
+        supabase.table("portfolio").upsert(lot_with_user).execute()
+        return True
+    except Exception as e:
+        st.error(f"Failed to save lot: {str(e)}")
+        return False
+
+
+def delete_lot_from_db(symbol, buy_timestamp):
+    """Deletes a lot from Supabase portfolio table."""
+    if not st.session_state.get("user"):
+        return False
+
+    try:
+        user_id = st.session_state.user.id
+        supabase.table("portfolio").delete().eq("user_id", user_id).eq("symbol", symbol).eq(
+            "buy_timestamp", buy_timestamp
+        ).execute()
+        return True
+    except Exception as e:
+        st.error(f"Failed to delete lot: {str(e)}")
+        return False
 
 
 def log_to_db(symbol, action, qty, price, avg_buy, pl_value):
-    """Appends a permanent trade record to SQLite."""
-    now = datetime.now().isoformat()
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS permanent_ledger (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            timestamp TEXT,
-            symbol TEXT,
-            action TEXT,
-            quantity INTEGER,
-            price REAL,
-            avg_buy_price REAL,
-            realized_pl REAL
-        )
-        """
-    )
-    c.execute(
-        """
-        INSERT INTO permanent_ledger (timestamp, symbol, action, quantity, price, avg_buy_price, realized_pl)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        """,
-        (now, symbol, action, qty, price, avg_buy, pl_value),
-    )
-    conn.commit()
-    conn.close()
+    """Appends a permanent trade record to Supabase permanent_ledger."""
+    if not st.session_state.get("user"):
+        return False
+
+    try:
+        user_id = st.session_state.user.id
+        now = datetime.now().isoformat()
+
+        record = {
+            "user_id": user_id,
+            "timestamp": now,
+            "symbol": symbol,
+            "action": action,
+            "quantity": qty,
+            "price": price,
+            "avg_buy_price": avg_buy,
+            "realized_pl": pl_value,
+        }
+
+        supabase.table("permanent_ledger").insert(record).execute()
+        return True
+    except Exception as e:
+        st.error(f"Failed to log trade: {str(e)}")
+        return False
 
 
 def handle_trade(action, symbol, quantity, price):
+    """Processes BUY or SELL trades with lowest-buy-first FIFO matching."""
     symbol = symbol.strip().upper()
     now = datetime.now().isoformat()
     portfolio = load_portfolio()
 
     if action == "buy":
-        portfolio.append(
-            {
-                "symbol": symbol,
-                "quantity": quantity,
-                "buy_price": price,
-                "buy_timestamp": now,
-                "last_updated": now,
-            }
-        )
-        save_portfolio(portfolio)
+        new_lot = {
+            "symbol": symbol,
+            "quantity": quantity,
+            "buy_price": price,
+            "buy_timestamp": now,
+            "last_updated": now,
+        }
+        save_portfolio_row(new_lot)
         log_to_db(symbol, "BUY", quantity, price, price, 0.0)
         return True, f"Bought {quantity} shares of {symbol} @ ${price:.2f}."
 
@@ -249,40 +189,62 @@ def handle_trade(action, symbol, quantity, price):
 
         lot["quantity"] -= consumed
         lot["last_updated"] = now
-        remaining_to_sell -= consumed
 
-    portfolio = [lot for lot in portfolio if lot["quantity"] > 0]
-    save_portfolio(portfolio)
+        if lot["quantity"] <= 0:
+            delete_lot_from_db(symbol, lot["buy_timestamp"])
+        else:
+            save_portfolio_row(lot)
+
+        remaining_to_sell -= consumed
 
     pl_status = "Profit" if total_realized_pl >= 0 else "Loss"
     return True, f"Sold {quantity} shares of {symbol}. Realized {pl_status}: ${abs(total_realized_pl):.2f}."
 
 
 def load_running_realized_pl():
-    """Returns running realized P/L by symbol and overall total from the archive DB."""
-    conn = sqlite3.connect(DB_FILE)
-    c = conn.cursor()
-    c.execute(
-        """
-        SELECT symbol, COALESCE(SUM(realized_pl), 0.0)
-        FROM permanent_ledger
-        GROUP BY symbol
-        """
-    )
-    rows = c.fetchall()
-    conn.close()
+    """Returns running realized P/L by symbol and overall total from Supabase."""
+    if not st.session_state.get("user"):
+        return {}, 0.0
 
-    pl_by_symbol = {symbol: float(total_pl or 0.0) for symbol, total_pl in rows}
-    total_pl = sum(pl_by_symbol.values())
-    return pl_by_symbol, total_pl
+    try:
+        user_id = st.session_state.user.id
+        
+        # Query permanent_ledger and aggregate by symbol
+        response = supabase.table("permanent_ledger").select("symbol, realized_pl").eq(
+            "user_id", user_id
+        ).execute()
+
+        pl_by_symbol = {}
+        for row in response.data:
+            symbol = row["symbol"]
+            pl = float(row.get("realized_pl", 0.0))
+            pl_by_symbol[symbol] = pl_by_symbol.get(symbol, 0.0) + pl
+
+        total_pl = sum(pl_by_symbol.values())
+        return pl_by_symbol, total_pl
+    except Exception as e:
+        st.error(f"Failed to load P/L: {str(e)}")
+        return {}, 0.0
 
 
-init_storage()
-
+# Main App
 st.set_page_config(page_title="Stock Tracker", layout="centered")
 st.title("Stock Trade Journal")
-st.caption("Uses the same lot-level CSV logic as View CSV Active Holdings.")
 
+# Authentication
+user = auth_ui()
+if not user:
+    st.stop()
+
+st.caption("Cloud-synced lot-level trading with RLS security.")
+
+st.markdown(f"**Logged in as:** {user.email}")
+if st.button("Log Out"):
+    st.session_state.user = None
+    st.session_state.access_token = None
+    st.rerun()
+
+# Trade Form
 with st.form("trade_form", clear_on_submit=True):
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -317,7 +279,8 @@ elif submit_sell:
     else:
         st.error(msg)
 
-st.markdown("### Current CSV Active Holdings")
+# Holdings Display
+st.markdown("### Current Cloud Holdings")
 current_portfolio = load_portfolio()
 running_pl_by_symbol, running_total_pl = load_running_realized_pl()
 
@@ -336,7 +299,7 @@ if current_portfolio:
         )
     st.dataframe(display_rows, use_container_width=True, hide_index=True)
 else:
-    st.info("CSV file is empty (No active lots).")
+    st.info("No active lots (Your portfolio is empty).")
 
 st.markdown("### Recent Action Log")
 if "action_log" in st.session_state and st.session_state.action_log:
