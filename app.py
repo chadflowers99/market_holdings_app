@@ -390,7 +390,7 @@ elif submit_sell:
         st.error(msg)
 
 # Holdings Display
-st.markdown("### Current Cloud Holdings")
+st.markdown("### Current Holdings")
 current_portfolio = load_portfolio()
 running_pl_by_symbol, running_total_pl = load_running_realized_pl()
 
