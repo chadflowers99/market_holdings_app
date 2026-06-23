@@ -408,7 +408,7 @@ if current_portfolio:
             {
                 "SYMBOL": lot["symbol"],
                 "QTY": lot["quantity"],
-                "AVG PRICE": round(lot["avg_price"], 2),
+                "PRICE": round(lot["avg_price"], 2),
             }
         )
     st.dataframe(display_rows, use_container_width=True, hide_index=True)
