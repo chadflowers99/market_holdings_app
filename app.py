@@ -227,7 +227,7 @@ def save_portfolio_row(lot):
         return False
 
 
-def delete_lot_from_db(symbol, purchase_date):
+def delete_lot_from_db(symbol, last_updated):
     """Deletes a lot from Supabase portfolio table."""
     if not st.session_state.get("user"):
         return False
@@ -235,7 +235,7 @@ def delete_lot_from_db(symbol, purchase_date):
     try:
         user_id = st.session_state.user.id
         supabase.table("portfolio").delete().eq("user_id", user_id).eq("symbol", symbol).eq(
-            "purchase_date", purchase_date
+            "last_updated", last_updated
         ).execute()
         return True
     except Exception as e:
@@ -281,7 +281,6 @@ def handle_trade(action, symbol, quantity, price):
             "symbol": symbol,
             "quantity": quantity,
             "avg_price": price,
-            "purchase_date": now,
             "last_updated": now,
         }
         save_portfolio_row(new_lot)
@@ -300,7 +299,7 @@ def handle_trade(action, symbol, quantity, price):
     remaining_to_sell = quantity
     total_realized_pl = 0.0
 
-    for lot in sorted(symbol_lots, key=lambda x: (x["avg_price"], x["purchase_date"])):
+    for lot in sorted(symbol_lots, key=lambda x: (x["avg_price"], x["last_updated"])):
         if remaining_to_sell <= 0:
             break
 
@@ -314,7 +313,7 @@ def handle_trade(action, symbol, quantity, price):
         lot["last_updated"] = now
 
         if lot["quantity"] <= 0:
-            delete_lot_from_db(symbol, lot["purchase_date"])
+            delete_lot_from_db(symbol, lot["last_updated"])
         else:
             save_portfolio_row(lot)
 
@@ -411,7 +410,7 @@ st.metric("Running Realized P/L", f"${running_total_pl:,.2f}")
 
 if current_portfolio:
     display_rows = []
-    for lot in sorted(current_portfolio, key=lambda x: (x["symbol"], x["purchase_date"])):
+    for lot in sorted(current_portfolio, key=lambda x: (x["symbol"], x["last_updated"])):
         display_rows.append(
             {
                 "SYMBOL": lot["symbol"],
