@@ -1,6 +1,10 @@
 from datetime import datetime
+import json
+from pathlib import Path
+
 import streamlit as st
 from supabase import create_client, Client
+from supabase.client import ClientOptions
 
 # Load Supabase credentials from secrets
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
@@ -10,8 +14,69 @@ if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     st.error("Missing SUPABASE_URL or SUPABASE_ANON_KEY in .streamlit/secrets.toml")
     st.stop()
 
-# Initialize Supabase client
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
+if "your-project" in SUPABASE_URL or "your-project-ref" in SUPABASE_URL:
+    st.error(
+        "SUPABASE_URL in .streamlit/secrets.toml is still a placeholder. "
+        "Use your real project URL from Supabase Settings > API."
+    )
+    st.stop()
+
+if "your_anon_key_here" in SUPABASE_ANON_KEY:
+    st.error(
+        "SUPABASE_ANON_KEY in .streamlit/secrets.toml is still a placeholder. "
+        "Use your real anon/publishable key from Supabase Settings > API."
+    )
+    st.stop()
+
+
+BASE_DIR = Path(__file__).resolve().parent
+AUTH_STORAGE_FILE = BASE_DIR / ".streamlit" / "supabase_auth_storage.json"
+
+
+class FileAuthStorage:
+    def __init__(self, storage_file):
+        self.storage_file = storage_file
+
+    def _read(self):
+        if not self.storage_file.exists():
+            return {}
+        try:
+            return json.loads(self.storage_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def _write(self, data):
+        self.storage_file.parent.mkdir(parents=True, exist_ok=True)
+        self.storage_file.write_text(json.dumps(data), encoding="utf-8")
+
+    def get_item(self, key):
+        return self._read().get(key)
+
+    def set_item(self, key, value):
+        data = self._read()
+        data[key] = value
+        self._write(data)
+
+    def remove_item(self, key):
+        data = self._read()
+        data.pop(key, None)
+        self._write(data)
+
+# Initialize Supabase client.
+# Use a file-backed auth storage adapter so the PKCE code verifier survives a full-page OAuth redirect.
+@st.cache_resource
+def get_supabase_client() -> Client:
+    return create_client(
+        SUPABASE_URL,
+        SUPABASE_ANON_KEY,
+        options=ClientOptions(
+            flow_type="pkce",
+            storage=FileAuthStorage(AUTH_STORAGE_FILE),
+        ),
+    )
+
+
+supabase: Client = get_supabase_client()
 
 
 def add_action_log(status, action, symbol, quantity, price, message):
@@ -43,8 +108,31 @@ def auth_ui():
     if st.session_state.user:
         return st.session_state.user
 
+    oauth_error = st.query_params.get("error")
+    oauth_error_description = st.query_params.get("error_description")
+    if oauth_error:
+        st.error(
+            f"GitHub login failed: {oauth_error}"
+            + (f" ({oauth_error_description})" if oauth_error_description else "")
+        )
+
+    # Handle OAuth callback from Supabase (PKCE flow).
+    auth_code = st.query_params.get("code")
+    if auth_code:
+        try:
+            response = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
+            if response and response.user:
+                st.session_state.user = response.user
+                st.session_state.access_token = response.session.access_token if response.session else None
+                st.query_params.clear()
+                st.rerun()
+            else:
+                st.error("GitHub login failed: no user returned from Supabase callback.")
+        except Exception as e:
+            st.error(f"GitHub login callback failed: {str(e)}")
+
     st.markdown("### Authentication")
-    auth_tab1, auth_tab2 = st.tabs(["Login", "Sign Up"])
+    auth_tab1, auth_tab2, auth_tab3 = st.tabs(["Login", "Sign Up", "GitHub"])
 
     with auth_tab1:
         email = st.text_input("Email", key="login_email")
@@ -52,7 +140,12 @@ def auth_ui():
 
         if st.button("Log In", key="login_button"):
             try:
-                response = supabase.auth.sign_in_with_password(email, password)
+                response = supabase.auth.sign_in_with_password(
+                    {
+                        "email": email,
+                        "password": password,
+                    }
+                )
                 st.session_state.user = response.user
                 st.session_state.access_token = response.session.access_token
                 st.rerun()
@@ -65,10 +158,40 @@ def auth_ui():
 
         if st.button("Sign Up", key="signup_button"):
             try:
-                response = supabase.auth.sign_up(email, password)
+                supabase.auth.sign_up(
+                    {
+                        "email": email,
+                        "password": password,
+                    }
+                )
                 st.success("Sign up successful! Please check your email to confirm.")
             except Exception as e:
                 st.error(f"Sign up failed: {str(e)}")
+
+    with auth_tab3:
+        current_url = getattr(st.context, "url", None)
+        if current_url:
+            redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
+        else:
+            app_base_url = st.secrets.get("APP_BASE_URL", "http://localhost:8501")
+            redirect_to = f"{app_base_url.rstrip('/')}/"
+        oauth_response = supabase.auth.sign_in_with_oauth(
+            {
+                "provider": "github",
+                "options": {
+                    "redirect_to": redirect_to,
+                },
+            }
+        )
+        authorize_url = oauth_response.url
+
+        st.write("Use your GitHub account to sign in.")
+        st.caption(f"GitHub will redirect back to: {redirect_to}")
+        st.link_button("Continue with GitHub", authorize_url, use_container_width=True)
+        st.caption(
+            "If this does not work, enable GitHub in Supabase Auth Providers and add your app URL"
+            " to Supabase Redirect URLs."
+        )
 
     return None
 
