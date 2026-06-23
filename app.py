@@ -208,9 +208,12 @@ def save_portfolio_row(lot):
     try:
         user_id = st.session_state.user.id
         lot_with_user = {**lot, "user_id": user_id}
-
-        # Try to update if it exists, otherwise insert
-        supabase.table("portfolio").upsert(lot_with_user).execute()
+        
+        # Insert with generated id, or update if id already exists
+        if "id" not in lot_with_user or not lot_with_user["id"]:
+            lot_with_user["id"] = None  # Let database generate it
+        
+        supabase.table("portfolio").upsert(lot_with_user, on_conflict=["id"]).execute()
         return True
     except Exception as e:
         st.error(f"Failed to save lot: {str(e)}")
