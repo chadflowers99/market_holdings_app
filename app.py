@@ -411,22 +411,23 @@ else:
     st.info("No active lots (Your portfolio is empty).")
 
 st.markdown("### Trade History")
-try:
-    user_id = st.session_state.user.id
-    ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).order("timestamp", desc=True).execute()
-    if ledger_response.data:
-        history_rows = []
-        for record in ledger_response.data:
-            history_rows.append({
-                "TIMESTAMP": record.get("timestamp", ""),
-                "ACTION": record.get("action", "").upper(),
-                "SYMBOL": record.get("symbol", ""),
-                "QTY": record.get("quantity", 0),
-                "PRICE": round(float(record.get("price", 0)), 2),
-                "REALIZED P/L": round(float(record.get("realized_pl", 0)), 2),
-            })
-        st.dataframe(history_rows, use_container_width=True, hide_index=True)
-    else:
-        st.caption("No trade history yet.")
-except Exception as e:
-    st.error(f"Failed to load trade history: {str(e)}")
+with st.expander("Show Trade History", expanded=False):
+    try:
+        user_id = st.session_state.user.id
+        ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).order("timestamp", desc=True).execute()
+        if ledger_response.data:
+            history_rows = []
+            for record in ledger_response.data:
+                history_rows.append({
+                    "TIMESTAMP": record.get("timestamp", ""),
+                    "ACTION": record.get("action", "").upper(),
+                    "SYMBOL": record.get("symbol", ""),
+                    "QTY": record.get("quantity", 0),
+                    "PRICE": round(float(record.get("price", 0)), 2),
+                    "REALIZED P/L": round(float(record.get("realized_pl", 0)), 2),
+                })
+            st.dataframe(history_rows, use_container_width=True, hide_index=True)
+        else:
+            st.caption("No trade history yet.")
+    except Exception as e:
+        st.error(f"Failed to load trade history: {str(e)}")
