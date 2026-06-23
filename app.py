@@ -105,6 +105,17 @@ def auth_ui():
     if st.session_state.user:
         return st.session_state.user
 
+    # Restore session from file-backed storage after page refresh
+    if not st.session_state.user:
+        try:
+            existing = supabase.auth.get_session()
+            if existing and existing.user:
+                st.session_state.user = existing.user
+                st.session_state.access_token = existing.access_token
+                return st.session_state.user
+        except Exception:
+            pass
+
     oauth_error = st.query_params.get("error")
     oauth_error_description = st.query_params.get("error_description")
     if oauth_error:
