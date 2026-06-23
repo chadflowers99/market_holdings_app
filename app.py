@@ -79,23 +79,6 @@ def get_supabase_client() -> Client:
 supabase: Client = get_supabase_client()
 
 
-def add_action_log(status, action, symbol, quantity, price, message):
-    """Stores a recent in-session action log entry for visibility/debugging."""
-    if "action_log" not in st.session_state:
-        st.session_state.action_log = []
-
-    st.session_state.action_log.insert(
-        0,
-        {
-            "SYMBOL": symbol,
-            "QTY": quantity,
-            "PRICE": round(float(price), 2),
-        },
-    )
-
-    st.session_state.action_log = st.session_state.action_log[:25]
-
-
 def auth_ui():
     """Displays login/signup UI and manages authentication state."""
     if "user" not in st.session_state:
@@ -390,19 +373,15 @@ with st.form("trade_form", clear_on_submit=True):
         submit_sell = st.form_submit_button("Log Sell", use_container_width=True)
 
 if (submit_buy or submit_sell) and not sym_input:
-    attempted_action = "BUY" if submit_buy else "SELL"
-    add_action_log("REJECTED", attempted_action, "", int(qty_input), float(price_input), "Missing stock symbol.")
     st.warning("Please enter a stock symbol.")
 elif submit_buy:
     ok, msg = handle_trade("buy", sym_input, int(qty_input), float(price_input))
-    add_action_log("ACCEPTED" if ok else "REJECTED", "BUY", sym_input, int(qty_input), float(price_input), msg)
     if ok:
         st.success(msg)
     else:
         st.error(msg)
 elif submit_sell:
     ok, msg = handle_trade("sell", sym_input, int(qty_input), float(price_input))
-    add_action_log("ACCEPTED" if ok else "REJECTED", "SELL", sym_input, int(qty_input), float(price_input), msg)
     if ok:
         st.success(msg)
     else:
@@ -429,9 +408,3 @@ if current_portfolio:
         st.dataframe(display_rows, use_container_width=True, hide_index=True)
 else:
     st.info("No active lots (Your portfolio is empty).")
-
-st.markdown("### Recent Action Log")
-if "action_log" in st.session_state and st.session_state.action_log:
-    st.dataframe(st.session_state.action_log, use_container_width=True, hide_index=True)
-else:
-    st.caption("No trade attempts yet in this session.")
