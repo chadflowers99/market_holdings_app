@@ -87,7 +87,6 @@ def add_action_log(status, action, symbol, quantity, price, message):
     st.session_state.action_log.insert(
         0,
         {
-            "ACTION": action.upper(),
             "SYMBOL": symbol,
             "QTY": quantity,
             "PRICE": round(float(price), 2),
