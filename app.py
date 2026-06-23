@@ -227,7 +227,7 @@ def save_portfolio_row(lot):
         return False
 
 
-def delete_lot_from_db(symbol, buy_timestamp):
+def delete_lot_from_db(symbol, purchase_date):
     """Deletes a lot from Supabase portfolio table."""
     if not st.session_state.get("user"):
         return False
@@ -235,7 +235,7 @@ def delete_lot_from_db(symbol, buy_timestamp):
     try:
         user_id = st.session_state.user.id
         supabase.table("portfolio").delete().eq("user_id", user_id).eq("symbol", symbol).eq(
-            "buy_timestamp", buy_timestamp
+            "purchase_date", purchase_date
         ).execute()
         return True
     except Exception as e:
@@ -280,8 +280,8 @@ def handle_trade(action, symbol, quantity, price):
         new_lot = {
             "symbol": symbol,
             "quantity": quantity,
-            "buy_price": price,
-            "buy_timestamp": now,
+            "avg_price": price,
+            "purchase_date": now,
             "last_updated": now,
         }
         save_portfolio_row(new_lot)
@@ -300,21 +300,21 @@ def handle_trade(action, symbol, quantity, price):
     remaining_to_sell = quantity
     total_realized_pl = 0.0
 
-    for lot in sorted(symbol_lots, key=lambda x: (x["buy_price"], x["buy_timestamp"])):
+    for lot in sorted(symbol_lots, key=lambda x: (x["avg_price"], x["purchase_date"])):
         if remaining_to_sell <= 0:
             break
 
         consumed = min(lot["quantity"], remaining_to_sell)
-        lot_realized_pl = (price - lot["buy_price"]) * consumed
+        lot_realized_pl = (price - lot["avg_price"]) * consumed
         total_realized_pl += lot_realized_pl
 
-        log_to_db(symbol, "SELL", consumed, price, lot["buy_price"], lot_realized_pl)
+        log_to_db(symbol, "SELL", consumed, price, lot["avg_price"], lot_realized_pl)
 
         lot["quantity"] -= consumed
         lot["last_updated"] = now
 
         if lot["quantity"] <= 0:
-            delete_lot_from_db(symbol, lot["buy_timestamp"])
+            delete_lot_from_db(symbol, lot["purchase_date"])
         else:
             save_portfolio_row(lot)
 
@@ -411,12 +411,12 @@ st.metric("Running Realized P/L", f"${running_total_pl:,.2f}")
 
 if current_portfolio:
     display_rows = []
-    for lot in sorted(current_portfolio, key=lambda x: (x["symbol"], x["buy_timestamp"])):
+    for lot in sorted(current_portfolio, key=lambda x: (x["symbol"], x["purchase_date"])):
         display_rows.append(
             {
                 "SYMBOL": lot["symbol"],
                 "QTY": lot["quantity"],
-                "BUY PRICE": round(lot["buy_price"], 2),
+                "AVG PRICE": round(lot["avg_price"], 2),
                 "RUNNING P/L": round(running_pl_by_symbol.get(lot["symbol"], 0.0), 2),
             }
         )
