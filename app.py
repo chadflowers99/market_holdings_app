@@ -87,13 +87,10 @@ def add_action_log(status, action, symbol, quantity, price, message):
     st.session_state.action_log.insert(
         0,
         {
-            "TIME": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "ACTION": action.upper(),
             "SYMBOL": symbol,
             "QTY": quantity,
             "PRICE": round(float(price), 2),
-            "STATUS": status,
-            "MESSAGE": message,
         },
     )
 
