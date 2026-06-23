@@ -193,7 +193,7 @@ def load_portfolio():
 
     try:
         user_id = st.session_state.user.id
-        response = supabase.table("portfolio").select("*").eq("user_id", user_id).execute()
+        response = supabase.table("portfolio").select("*").eq("user_id", user_id).gt("quantity", 0).execute()
         return response.data if response.data else []
     except Exception as e:
         st.error(f"Failed to load portfolio: {str(e)}")
@@ -218,18 +218,18 @@ def save_portfolio_row(lot):
 
 
 def delete_lot_from_db(symbol, last_updated):
-    """Deletes a lot from Supabase portfolio table."""
+    """Sets lot quantity to 0 in Supabase portfolio table."""
     if not st.session_state.get("user"):
         return False
 
     try:
         user_id = st.session_state.user.id
-        supabase.table("portfolio").delete().eq("user_id", user_id).eq("symbol", symbol).eq(
+        supabase.table("portfolio").update({"quantity": 0}).eq("user_id", user_id).eq("symbol", symbol).eq(
             "last_updated", last_updated
         ).execute()
         return True
     except Exception as e:
-        st.error(f"Failed to delete lot: {str(e)}")
+        st.error(f"Failed to close lot: {str(e)}")
         return False
 
 
@@ -409,3 +409,24 @@ if current_portfolio:
     st.dataframe(display_rows, use_container_width=True, hide_index=True)
 else:
     st.info("No active lots (Your portfolio is empty).")
+
+st.markdown("### Trade History")
+try:
+    user_id = st.session_state.user.id
+    ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).order("timestamp", desc=True).execute()
+    if ledger_response.data:
+        history_rows = []
+        for record in ledger_response.data:
+            history_rows.append({
+                "TIMESTAMP": record.get("timestamp", ""),
+                "ACTION": record.get("action", "").upper(),
+                "SYMBOL": record.get("symbol", ""),
+                "QTY": record.get("quantity", 0),
+                "PRICE": round(float(record.get("price", 0)), 2),
+                "REALIZED P/L": round(float(record.get("realized_pl", 0)), 2),
+            })
+        st.dataframe(history_rows, use_container_width=True, hide_index=True)
+    else:
+        st.caption("No trade history yet.")
+except Exception as e:
+    st.error(f"Failed to load trade history: {str(e)}")
