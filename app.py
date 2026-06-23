@@ -299,11 +299,13 @@ def handle_trade(action, symbol, quantity, price):
 
         log_to_db(symbol, "SELL", consumed, price, lot["avg_price"], lot_realized_pl)
 
+        # Save original timestamp before updating
+        original_last_updated = lot["last_updated"]
         lot["quantity"] -= consumed
         lot["last_updated"] = now
 
         if lot["quantity"] <= 0:
-            delete_lot_from_db(symbol, lot["last_updated"])
+            delete_lot_from_db(symbol, original_last_updated)
         else:
             save_portfolio_row(lot)
 
