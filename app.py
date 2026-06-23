@@ -201,7 +201,7 @@ def load_portfolio():
 
 
 def save_portfolio_row(lot):
-    """Inserts or updates a single lot in Supabase portfolio table."""
+    """Inserts a new lot or updates existing lot in Supabase portfolio table."""
     if not st.session_state.get("user"):
         return False
 
@@ -209,11 +209,13 @@ def save_portfolio_row(lot):
         user_id = st.session_state.user.id
         lot_with_user = {**lot, "user_id": user_id}
         
-        # Insert with generated id, or update if id already exists
-        if "id" not in lot_with_user or not lot_with_user["id"]:
-            lot_with_user["id"] = None  # Let database generate it
-        
-        supabase.table("portfolio").upsert(lot_with_user, on_conflict=["id"]).execute()
+        # If lot has an id, update it; otherwise insert new
+        if "id" in lot_with_user and lot_with_user["id"]:
+            # Update existing lot
+            supabase.table("portfolio").update(lot_with_user).eq("id", lot_with_user["id"]).execute()
+        else:
+            # Insert new lot (id will be auto-generated)
+            supabase.table("portfolio").insert(lot_with_user).execute()
         return True
     except Exception as e:
         st.error(f"Failed to save lot: {str(e)}")
