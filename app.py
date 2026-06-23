@@ -416,7 +416,17 @@ running_pl_by_symbol, running_total_pl = load_running_realized_pl()
 st.metric("Running Realized P/L", f"${running_total_pl:,.2f}")
 
 if current_portfolio:
-    pass
+    if st.button("Show Current Holdings", use_container_width=True):
+        display_rows = []
+        for lot in sorted(current_portfolio, key=lambda x: (x["symbol"], x["last_updated"])):
+            display_rows.append(
+                {
+                    "SYMBOL": lot["symbol"],
+                    "QTY": lot["quantity"],
+                    "AVG PRICE": round(lot["avg_price"], 2),
+                }
+            )
+        st.dataframe(display_rows, use_container_width=True, hide_index=True)
 else:
     st.info("No active lots (Your portfolio is empty).")
 
