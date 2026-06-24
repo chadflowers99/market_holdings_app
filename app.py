@@ -491,17 +491,57 @@ with st.expander("Show Trade History", expanded=False):
         user_id = st.session_state.user.id
         ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).order("timestamp", desc=True).execute()
         if ledger_response.data:
+            filter_col1, filter_col2, filter_col3 = st.columns(3)
+            with filter_col1:
+                action_filter = st.selectbox("Action", ["All", "BUY", "SELL"], key="trade_history_action_filter")
+            with filter_col2:
+                symbol_filter = st.text_input("Symbol", key="trade_history_symbol_filter").strip().upper()
+            with filter_col3:
+                use_start_date_filter = st.toggle("Use from date", value=False, key="trade_history_use_start_date_filter")
+                start_date_filter = None
+                if use_start_date_filter:
+                    start_date_filter = st.date_input("From date", key="trade_history_start_date_filter")
+
             history_rows = []
             for record in ledger_response.data:
-                history_rows.append({
-                    "TIMESTAMP": record.get("timestamp", ""),
+                timestamp_value = record.get("timestamp", "")
+                try:
+                    parsed_timestamp = datetime.fromisoformat(str(timestamp_value).replace("Z", "+00:00"))
+                except ValueError:
+                    parsed_timestamp = None
+
+                row = {
+                    "TIMESTAMP": timestamp_value,
                     "ACTION": record.get("action", "").upper(),
                     "SYMBOL": record.get("symbol", ""),
                     "QTY": record.get("quantity", 0),
                     "PRICE": round(float(record.get("price", 0)), 2),
                     "REALIZED P/L": round(float(record.get("realized_pl", 0)), 2),
+                    "_parsed_date": parsed_timestamp.date() if parsed_timestamp else None,
+                }
+                history_rows.append(row)
+
+            filtered_rows = []
+            for row in history_rows:
+                if action_filter != "All" and row["ACTION"] != action_filter:
+                    continue
+                if symbol_filter and row["SYMBOL"].upper() != symbol_filter:
+                    continue
+                if start_date_filter and row["_parsed_date"] and row["_parsed_date"] < start_date_filter:
+                    continue
+                filtered_rows.append({
+                    "TIMESTAMP": row["TIMESTAMP"],
+                    "ACTION": row["ACTION"],
+                    "SYMBOL": row["SYMBOL"],
+                    "QTY": row["QTY"],
+                    "PRICE": row["PRICE"],
+                    "REALIZED P/L": row["REALIZED P/L"],
                 })
-            st.dataframe(history_rows, use_container_width=True, hide_index=True)
+
+            if filtered_rows:
+                st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
+            else:
+                st.caption("No trade history matches the current filters.")
         else:
             st.caption("No trade history yet.")
     except Exception as e:
