@@ -14,6 +14,13 @@ if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     st.error("Missing SUPABASE_URL or SUPABASE_ANON_KEY in .streamlit/secrets.toml")
     st.stop()
 
+if "sb_secret_" in SUPABASE_ANON_KEY.lower() or "service_role" in SUPABASE_ANON_KEY.lower():
+    st.error(
+        "SUPABASE_ANON_KEY appears to be a service-role/secret key. "
+        "Use the anon/publishable key from Supabase Settings > API."
+    )
+    st.stop()
+
 if "your-project" in SUPABASE_URL or "your-project-ref" in SUPABASE_URL:
     st.error(
         "SUPABASE_URL in .streamlit/secrets.toml is still a placeholder. "
