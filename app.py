@@ -1,5 +1,6 @@
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 
 import streamlit as st
@@ -61,7 +62,23 @@ BASE_DIR = Path(__file__).resolve().parent
 AUTH_STORAGE_FILE = BASE_DIR / ".streamlit" / "supabase_auth_storage.json"
 
 
+class MemoryAuthStorage:
+    """In-memory auth storage for Streamlit Cloud (no file I/O needed)."""
+    def __init__(self):
+        self._store = {}
+
+    def get_item(self, key):
+        return self._store.get(key)
+
+    def set_item(self, key, value):
+        self._store[key] = value
+
+    def remove_item(self, key):
+        self._store.pop(key, None)
+
+
 class FileAuthStorage:
+    """File-backed auth storage for local dev — survives page reloads."""
     def __init__(self, storage_file):
         self.storage_file = storage_file
 
@@ -90,16 +107,22 @@ class FileAuthStorage:
         data.pop(key, None)
         self._write(data)
 
-# Initialize Supabase client.
-# Use a file-backed auth storage adapter so the PKCE code verifier survives a full-page OAuth redirect.
+
+def _is_cloud():
+    """Detect if running on Streamlit Cloud (no writable local filesystem)."""
+    return not AUTH_STORAGE_FILE.parent.exists() or os.environ.get("STREAMLIT_SHARING_MODE") or "/mount/src" in str(BASE_DIR)
+
+
+# Initialize Supabase client with appropriate storage backend.
 @st.cache_resource
 def get_supabase_client() -> Client:
+    storage = MemoryAuthStorage() if _is_cloud() else FileAuthStorage(AUTH_STORAGE_FILE)
     return create_client(
         SUPABASE_URL,
         SUPABASE_ANON_KEY,
         options=ClientOptions(
             flow_type="pkce",
-            storage=FileAuthStorage(AUTH_STORAGE_FILE),
+            storage=storage,
         ),
     )
 
