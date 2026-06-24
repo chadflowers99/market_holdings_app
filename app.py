@@ -431,6 +431,19 @@ def _update_ledger_record(record, updates):
     query.execute()
 
 
+def _delete_ledger_record(record):
+    """Delete one ledger row using id when available, otherwise a strict row match."""
+    query = supabase.table("permanent_ledger").delete()
+    record_id = record.get("id")
+    if record_id is not None:
+        query = query.eq("id", record_id)
+    else:
+        query = query.eq("user_id", st.session_state.user.id)
+        for field in ("timestamp", "action", "symbol", "quantity", "price"):
+            query = query.eq(field, record.get(field))
+    query.execute()
+
+
 def rebuild_portfolio_from_ledger(user_id):
     """Replays the entire ledger to rebuild current holdings and realized P/L consistency."""
     ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).execute()
@@ -679,7 +692,11 @@ with st.expander("Show Trade History", expanded=False):
                             format="%.2f",
                             value=float(selected_trade.get("price", 0.0) or 0.0),
                         )
-                        save_trade_edit = st.form_submit_button("Save Changes", use_container_width=True)
+                        save_trade_col, delete_trade_col = st.columns(2)
+                        with save_trade_col:
+                            save_trade_edit = st.form_submit_button("Save Changes", use_container_width=True)
+                        with delete_trade_col:
+                            delete_trade_edit = st.form_submit_button("Delete Trade", use_container_width=True)
 
                     if save_trade_edit:
                         try:
@@ -695,6 +712,14 @@ with st.expander("Show Trade History", expanded=False):
                             st.rerun()
                         except Exception as e:
                             st.error(f"Failed to update trade: {str(e)}")
+                    elif delete_trade_edit:
+                        try:
+                            _delete_ledger_record(selected_trade)
+                            rebuild_portfolio_from_ledger(user_id)
+                            st.success("Trade deleted and portfolio recalculated.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to delete trade: {str(e)}")
             else:
                 st.caption("No trade history matches the current filters.")
         else:
