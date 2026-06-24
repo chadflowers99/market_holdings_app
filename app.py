@@ -502,6 +502,11 @@ with st.expander("Show Trade History", expanded=False):
                 if use_start_date_filter:
                     start_date_filter = st.date_input("From date", key="trade_history_start_date_filter")
 
+            end_date_filter = None
+            use_end_date_filter = st.toggle("Use end date", value=False, key="trade_history_use_end_date_filter")
+            if use_end_date_filter:
+                end_date_filter = st.date_input("End date", key="trade_history_end_date_filter")
+
             history_rows = []
             for record in ledger_response.data:
                 timestamp_value = record.get("timestamp", "")
@@ -527,6 +532,8 @@ with st.expander("Show Trade History", expanded=False):
                 if symbol_filter and row["SYMBOL"].upper() != symbol_filter:
                     continue
                 if start_date_filter and row["_parsed_date"] and row["_parsed_date"] < start_date_filter:
+                    continue
+                if end_date_filter and row["_parsed_date"] and row["_parsed_date"] > end_date_filter:
                     continue
                 filtered_rows.append({
                     "ACTION": row["ACTION"],
