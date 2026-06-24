@@ -597,6 +597,30 @@ with st.expander("Show Trade History", expanded=False):
         user_id = st.session_state.user.id
         ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).order("timestamp", desc=True).execute()
         if ledger_response.data:
+            history_rows = []
+            available_dates = []
+            for record in ledger_response.data:
+                timestamp_value = record.get("timestamp", "")
+                try:
+                    parsed_timestamp = datetime.fromisoformat(str(timestamp_value).replace("Z", "+00:00"))
+                except ValueError:
+                    parsed_timestamp = None
+
+                parsed_date = parsed_timestamp.date() if parsed_timestamp else None
+                if parsed_date:
+                    available_dates.append(parsed_date)
+
+                row = {
+                    "_record": dict(record),
+                    "TIMESTAMP": timestamp_value,
+                    "ACTION": record.get("action", "").upper(),
+                    "SYMBOL": record.get("symbol", ""),
+                    "QTY": record.get("quantity", 0),
+                    "PRICE": round(float(record.get("price", 0)), 2),
+                    "_parsed_date": parsed_date,
+                }
+                history_rows.append(row)
+
             filter_col1, filter_col2, filter_col3 = st.columns(3)
             with filter_col1:
                 action_filter = st.selectbox("Action", ["All", "BUY", "SELL"], key="trade_history_action_filter")
@@ -606,31 +630,21 @@ with st.expander("Show Trade History", expanded=False):
                 use_date_range_filter = st.toggle("Use date range", value=False, key="trade_history_use_date_range_filter")
                 start_date_filter = None
                 end_date_filter = None
-                if use_date_range_filter:
-                    start_date_filter = st.date_input("From date", key="trade_history_start_date_filter")
-                    end_date_filter = st.date_input("End date", key="trade_history_end_date_filter")
-
-            history_rows = []
-            filtered_records = []
-            for record in ledger_response.data:
-                timestamp_value = record.get("timestamp", "")
-                try:
-                    parsed_timestamp = datetime.fromisoformat(str(timestamp_value).replace("Z", "+00:00"))
-                except ValueError:
-                    parsed_timestamp = None
-
-                row = {
-                    "_record": dict(record),
-                    "TIMESTAMP": timestamp_value,
-                    "ACTION": record.get("action", "").upper(),
-                    "SYMBOL": record.get("symbol", ""),
-                    "QTY": record.get("quantity", 0),
-                    "PRICE": round(float(record.get("price", 0)), 2),
-                    "_parsed_date": parsed_timestamp.date() if parsed_timestamp else None,
-                }
-                history_rows.append(row)
+                if use_date_range_filter and available_dates:
+                    min_date = min(available_dates)
+                    max_date = max(available_dates)
+                    date_range = st.date_input(
+                        "Date range",
+                        value=(min_date, max_date),
+                        min_value=min_date,
+                        max_value=max_date,
+                        key="trade_history_date_range_filter",
+                    )
+                    if isinstance(date_range, tuple) and len(date_range) == 2:
+                        start_date_filter, end_date_filter = date_range
 
             filtered_rows = []
+            filtered_records = []
             for row in history_rows:
                 if action_filter != "All" and row["ACTION"] != action_filter:
                     continue
