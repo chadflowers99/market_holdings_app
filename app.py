@@ -590,15 +590,12 @@ with st.expander("Show Trade History", expanded=False):
             with filter_col2:
                 symbol_filter = st.text_input("Symbol", key="trade_history_symbol_filter").strip().upper()
             with filter_col3:
-                use_start_date_filter = st.toggle("Use from date", value=False, key="trade_history_use_start_date_filter")
+                use_date_range_filter = st.toggle("Use date range", value=False, key="trade_history_use_date_range_filter")
                 start_date_filter = None
-                if use_start_date_filter:
+                end_date_filter = None
+                if use_date_range_filter:
                     start_date_filter = st.date_input("From date", key="trade_history_start_date_filter")
-
-            end_date_filter = None
-            use_end_date_filter = st.toggle("Use end date", value=False, key="trade_history_use_end_date_filter")
-            if use_end_date_filter:
-                end_date_filter = st.date_input("End date", key="trade_history_end_date_filter")
+                    end_date_filter = st.date_input("End date", key="trade_history_end_date_filter")
 
             history_rows = []
             filtered_records = []
