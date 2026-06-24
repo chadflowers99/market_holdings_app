@@ -633,24 +633,29 @@ with st.expander("Show Trade History", expanded=False):
                 if use_date_range_filter and available_dates:
                     min_date = min(available_dates)
                     max_date = max(available_dates)
-                    date_range = st.date_input(
-                        "Date range",
-                        value=(min_date, max_date),
-                        min_value=min_date,
-                        max_value=max_date,
-                        key="trade_history_date_range_filter",
-                    )
-                    if isinstance(date_range, (tuple, list)):
-                        if len(date_range) >= 2:
-                            start_date_filter = date_range[0]
-                            end_date_filter = date_range[1]
-                        elif len(date_range) == 1:
-                            start_date_filter = date_range[0]
-                            end_date_filter = date_range[0]
-                    elif date_range is not None:
-                        # Some clients can return a single date value instead of a range.
-                        start_date_filter = date_range
-                        end_date_filter = date_range
+                    today = datetime.now().date()
+                    default_date = today if min_date <= today <= max_date else max_date
+
+                    date_col1, date_col2 = st.columns(2)
+                    with date_col1:
+                        start_date_filter = st.date_input(
+                            "From date",
+                            value=default_date,
+                            min_value=min_date,
+                            max_value=max_date,
+                            key="trade_history_start_date_filter_v2",
+                        )
+                    with date_col2:
+                        end_date_filter = st.date_input(
+                            "End date",
+                            value=default_date,
+                            min_value=min_date,
+                            max_value=max_date,
+                            key="trade_history_end_date_filter_v2",
+                        )
+
+                    if start_date_filter and end_date_filter and start_date_filter > end_date_filter:
+                        start_date_filter, end_date_filter = end_date_filter, start_date_filter
 
             filtered_rows = []
             filtered_records = []
