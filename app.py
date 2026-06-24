@@ -606,6 +606,12 @@ with st.expander("Show Trade History", expanded=False):
                 except ValueError:
                     parsed_timestamp = None
 
+                if parsed_timestamp is None:
+                    try:
+                        parsed_timestamp = datetime.strptime(str(timestamp_value)[:10], "%Y-%m-%d")
+                    except ValueError:
+                        parsed_timestamp = None
+
                 parsed_date = parsed_timestamp.date() if parsed_timestamp else None
                 if parsed_date:
                     available_dates.append(parsed_date)
@@ -679,6 +685,7 @@ with st.expander("Show Trade History", expanded=False):
                 })
 
             if filtered_rows:
+                st.caption(f"Showing {len(filtered_rows)} of {len(history_rows)} trades")
                 st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
                 csv_buffer = io.StringIO()
                 csv_writer = csv.DictWriter(csv_buffer, fieldnames=["ACTION", "SYMBOL", "QTY", "PRICE"])
