@@ -640,8 +640,17 @@ with st.expander("Show Trade History", expanded=False):
                         max_value=max_date,
                         key="trade_history_date_range_filter",
                     )
-                    if isinstance(date_range, tuple) and len(date_range) == 2:
-                        start_date_filter, end_date_filter = date_range
+                    if isinstance(date_range, (tuple, list)):
+                        if len(date_range) >= 2:
+                            start_date_filter = date_range[0]
+                            end_date_filter = date_range[1]
+                        elif len(date_range) == 1:
+                            start_date_filter = date_range[0]
+                            end_date_filter = date_range[0]
+                    elif date_range is not None:
+                        # Some clients can return a single date value instead of a range.
+                        start_date_filter = date_range
+                        end_date_filter = date_range
 
             filtered_rows = []
             filtered_records = []
@@ -649,6 +658,8 @@ with st.expander("Show Trade History", expanded=False):
                 if action_filter != "All" and row["ACTION"] != action_filter:
                     continue
                 if symbol_filter and row["SYMBOL"].upper() != symbol_filter:
+                    continue
+                if use_date_range_filter and row["_parsed_date"] is None:
                     continue
                 if start_date_filter and row["_parsed_date"] and row["_parsed_date"] < start_date_filter:
                     continue
