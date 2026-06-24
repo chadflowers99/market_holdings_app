@@ -516,7 +516,6 @@ with st.expander("Show Trade History", expanded=False):
                     "SYMBOL": record.get("symbol", ""),
                     "QTY": record.get("quantity", 0),
                     "PRICE": round(float(record.get("price", 0)), 2),
-                    "REALIZED P/L": round(float(record.get("realized_pl", 0)), 2),
                     "_parsed_date": parsed_timestamp.date() if parsed_timestamp else None,
                 }
                 history_rows.append(row)
@@ -530,12 +529,10 @@ with st.expander("Show Trade History", expanded=False):
                 if start_date_filter and row["_parsed_date"] and row["_parsed_date"] < start_date_filter:
                     continue
                 filtered_rows.append({
-                    "TIMESTAMP": row["TIMESTAMP"],
                     "ACTION": row["ACTION"],
                     "SYMBOL": row["SYMBOL"],
                     "QTY": row["QTY"],
                     "PRICE": row["PRICE"],
-                    "REALIZED P/L": row["REALIZED P/L"],
                 })
 
             if filtered_rows:
