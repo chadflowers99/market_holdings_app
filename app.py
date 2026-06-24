@@ -416,8 +416,13 @@ st.caption("Cloud-synced lot-level trading with RLS security.")
 
 st.markdown(f"**Logged in as:** {user.email}")
 if st.button("Log Out"):
+    try:
+        supabase.auth.sign_out()
+    except Exception as e:
+        st.warning(f"Sign out warning: {str(e)}")
     st.session_state.user = None
     st.session_state.access_token = None
+    st.query_params.clear()
     st.rerun()
 
 # Trade Form
