@@ -8,10 +8,13 @@ from supabase.client import ClientOptions
 
 # Load Supabase credentials from secrets
 SUPABASE_URL = st.secrets.get("SUPABASE_URL")
-SUPABASE_ANON_KEY = st.secrets.get("SUPABASE_ANON_KEY")
+SUPABASE_ANON_KEY = st.secrets.get("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_KEY")
 
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
-    st.error("Missing SUPABASE_URL or SUPABASE_ANON_KEY in .streamlit/secrets.toml")
+    st.error(
+        "Missing SUPABASE_URL and/or Supabase key in secrets. "
+        "Expected SUPABASE_ANON_KEY (preferred) or SUPABASE_KEY (legacy)."
+    )
     st.stop()
 
 if "sb_secret_" in SUPABASE_ANON_KEY.lower() or "service_role" in SUPABASE_ANON_KEY.lower():
