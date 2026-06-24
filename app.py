@@ -652,50 +652,52 @@ with st.expander("Show Trade History", expanded=False):
                     use_container_width=True,
                 )
 
-                st.markdown("#### Edit Selected Trade")
-                trade_choices = list(range(len(filtered_records)))
-                selected_trade_index = st.selectbox(
-                    "Choose trade",
-                    trade_choices,
-                    format_func=lambda idx: _ledger_display_label(filtered_records[idx]["_record"], idx),
-                    key="trade_history_edit_choice",
-                )
-                selected_trade = filtered_records[selected_trade_index]["_record"]
-
-                with st.form("edit_trade_form"):
-                    current_action = str(selected_trade.get("action", "")).upper()
-                    action_index = 0 if current_action == "BUY" else 1
-                    edit_action = st.selectbox("Action", ["BUY", "SELL"], index=action_index)
-                    edit_symbol = st.text_input("Symbol", value=str(selected_trade.get("symbol", ""))).strip().upper()
-                    edit_qty = st.number_input(
-                        "Quantity",
-                        min_value=1,
-                        step=1,
-                        value=int(selected_trade.get("quantity", 1) or 1),
+                show_edit_trade = st.toggle("Show edit selected trade", value=False, key="trade_history_show_edit_trade")
+                if show_edit_trade:
+                    st.markdown("#### Edit Selected Trade")
+                    trade_choices = list(range(len(filtered_records)))
+                    selected_trade_index = st.selectbox(
+                        "Choose trade",
+                        trade_choices,
+                        format_func=lambda idx: _ledger_display_label(filtered_records[idx]["_record"], idx),
+                        key="trade_history_edit_choice",
                     )
-                    edit_price = st.number_input(
-                        "Price",
-                        min_value=0.01,
-                        step=0.01,
-                        format="%.2f",
-                        value=float(selected_trade.get("price", 0.0) or 0.0),
-                    )
-                    save_trade_edit = st.form_submit_button("Save Changes", use_container_width=True)
+                    selected_trade = filtered_records[selected_trade_index]["_record"]
 
-                if save_trade_edit:
-                    try:
-                        updated_record = {
-                            "action": edit_action,
-                            "symbol": edit_symbol,
-                            "quantity": int(edit_qty),
-                            "price": float(edit_price),
-                        }
-                        _update_ledger_record(selected_trade, updated_record)
-                        rebuild_portfolio_from_ledger(user_id)
-                        st.success("Trade updated and portfolio recalculated.")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed to update trade: {str(e)}")
+                    with st.form("edit_trade_form"):
+                        current_action = str(selected_trade.get("action", "")).upper()
+                        action_index = 0 if current_action == "BUY" else 1
+                        edit_action = st.selectbox("Action", ["BUY", "SELL"], index=action_index)
+                        edit_symbol = st.text_input("Symbol", value=str(selected_trade.get("symbol", ""))).strip().upper()
+                        edit_qty = st.number_input(
+                            "Quantity",
+                            min_value=1,
+                            step=1,
+                            value=int(selected_trade.get("quantity", 1) or 1),
+                        )
+                        edit_price = st.number_input(
+                            "Price",
+                            min_value=0.01,
+                            step=0.01,
+                            format="%.2f",
+                            value=float(selected_trade.get("price", 0.0) or 0.0),
+                        )
+                        save_trade_edit = st.form_submit_button("Save Changes", use_container_width=True)
+
+                    if save_trade_edit:
+                        try:
+                            updated_record = {
+                                "action": edit_action,
+                                "symbol": edit_symbol,
+                                "quantity": int(edit_qty),
+                                "price": float(edit_price),
+                            }
+                            _update_ledger_record(selected_trade, updated_record)
+                            rebuild_portfolio_from_ledger(user_id)
+                            st.success("Trade updated and portfolio recalculated.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed to update trade: {str(e)}")
             else:
                 st.caption("No trade history matches the current filters.")
         else:
