@@ -228,23 +228,20 @@ def auth_ui():
 
     with auth_tab3:
         current_url = getattr(st.context, "url", None)
+        oauth_payload = {"provider": "github"}
+        redirect_to = None
         if current_url:
             redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
-        else:
-            app_base_url = st.secrets.get("APP_BASE_URL", "http://localhost:8501")
-            redirect_to = f"{app_base_url.rstrip('/')}/"
-        oauth_response = supabase.auth.sign_in_with_oauth(
-            {
-                "provider": "github",
-                "options": {
-                    "redirect_to": redirect_to,
-                },
-            }
-        )
+            oauth_payload["options"] = {"redirect_to": redirect_to}
+
+        oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
         authorize_url = oauth_response.url
 
         st.write("Use your GitHub account to sign in.")
-        st.caption(f"GitHub will redirect back to: {redirect_to}")
+        if redirect_to:
+            st.caption(f"GitHub will redirect back to: {redirect_to}")
+        else:
+            st.caption("GitHub will redirect using Supabase Auth Site/Redirect URL settings.")
         st.link_button("Continue with GitHub", authorize_url, use_container_width=True)
         st.caption(
             "If this does not work, enable GitHub in Supabase Auth Providers and add your app URL"
