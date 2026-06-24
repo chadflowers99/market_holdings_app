@@ -1,6 +1,6 @@
 from datetime import datetime
 import json
-import os
+import tempfile
 from pathlib import Path
 
 import streamlit as st
@@ -60,10 +60,11 @@ if "your_anon_key_here" in SUPABASE_ANON_KEY.lower():
 
 BASE_DIR = Path(__file__).resolve().parent
 AUTH_STORAGE_FILE = BASE_DIR / ".streamlit" / "supabase_auth_storage.json"
+AUTH_STORAGE_FILE_FALLBACK = Path(tempfile.gettempdir()) / "stock_trade_supabase_auth_storage.json"
 
 
 class MemoryAuthStorage:
-    """In-memory auth storage for Streamlit Cloud (no file I/O needed)."""
+    """In-memory auth storage fallback when filesystem is not writable."""
     def __init__(self):
         self._store = {}
 
@@ -78,7 +79,7 @@ class MemoryAuthStorage:
 
 
 class FileAuthStorage:
-    """File-backed auth storage for local dev — survives page reloads."""
+    """File-backed auth storage — required for PKCE verifier across redirects."""
     def __init__(self, storage_file):
         self.storage_file = storage_file
 
@@ -108,21 +109,31 @@ class FileAuthStorage:
         self._write(data)
 
 
-def _is_cloud():
-    """Detect if running on Streamlit Cloud (no writable local filesystem)."""
-    return (
-        str(BASE_DIR).startswith("/mount/src")
-        or os.environ.get("STREAMLIT_SHARING_MODE") is not None
-        or os.environ.get("HOME", "").startswith("/home/appuser")
-    )
+def _is_writable(path: Path) -> bool:
+    """Checks whether a path is writable by creating/removing a tiny probe file."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        probe = path.parent / ".write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def _build_auth_storage():
+    """Use file-backed storage when possible to preserve PKCE verifier on callback."""
+    if _is_writable(AUTH_STORAGE_FILE):
+        return FileAuthStorage(AUTH_STORAGE_FILE)
+    if _is_writable(AUTH_STORAGE_FILE_FALLBACK):
+        return FileAuthStorage(AUTH_STORAGE_FILE_FALLBACK)
+    return MemoryAuthStorage()
 
 
 # Initialize Supabase client with appropriate storage backend.
 @st.cache_resource
 def get_supabase_client() -> Client:
-    # Always use MemoryAuthStorage — FileAuthStorage is only needed for PKCE
-    # verifier persistence across OAuth redirects, which is handled by session state.
-    storage = MemoryAuthStorage()
+    storage = _build_auth_storage()
     return create_client(
         SUPABASE_URL,
         SUPABASE_ANON_KEY,
