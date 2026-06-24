@@ -110,13 +110,19 @@ class FileAuthStorage:
 
 def _is_cloud():
     """Detect if running on Streamlit Cloud (no writable local filesystem)."""
-    return not AUTH_STORAGE_FILE.parent.exists() or os.environ.get("STREAMLIT_SHARING_MODE") or "/mount/src" in str(BASE_DIR)
+    return (
+        str(BASE_DIR).startswith("/mount/src")
+        or os.environ.get("STREAMLIT_SHARING_MODE") is not None
+        or os.environ.get("HOME", "").startswith("/home/appuser")
+    )
 
 
 # Initialize Supabase client with appropriate storage backend.
 @st.cache_resource
 def get_supabase_client() -> Client:
-    storage = MemoryAuthStorage() if _is_cloud() else FileAuthStorage(AUTH_STORAGE_FILE)
+    # Always use MemoryAuthStorage — FileAuthStorage is only needed for PKCE
+    # verifier persistence across OAuth redirects, which is handled by session state.
+    storage = MemoryAuthStorage()
     return create_client(
         SUPABASE_URL,
         SUPABASE_ANON_KEY,
