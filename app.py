@@ -6,9 +6,27 @@ import streamlit as st
 from supabase import create_client, Client
 from supabase.client import ClientOptions
 
-# Load Supabase credentials from secrets
-SUPABASE_URL = st.secrets.get("SUPABASE_URL")
-SUPABASE_ANON_KEY = st.secrets.get("SUPABASE_ANON_KEY") or st.secrets.get("SUPABASE_KEY")
+# Load Supabase credentials from secrets.
+# Supports both flat keys and optional nested [supabase] block.
+supabase_block = st.secrets.get("supabase", {})
+
+SUPABASE_URL = (
+    st.secrets.get("SUPABASE_URL")
+    or supabase_block.get("SUPABASE_URL")
+    or supabase_block.get("url")
+)
+SUPABASE_ANON_KEY = (
+    st.secrets.get("SUPABASE_ANON_KEY")
+    or st.secrets.get("SUPABASE_KEY")
+    or supabase_block.get("SUPABASE_ANON_KEY")
+    or supabase_block.get("SUPABASE_KEY")
+    or supabase_block.get("anon_key")
+)
+
+if isinstance(SUPABASE_URL, str):
+    SUPABASE_URL = SUPABASE_URL.strip()
+if isinstance(SUPABASE_ANON_KEY, str):
+    SUPABASE_ANON_KEY = SUPABASE_ANON_KEY.strip()
 
 if not SUPABASE_URL or not SUPABASE_ANON_KEY:
     st.error(
@@ -31,7 +49,7 @@ if "your-project" in SUPABASE_URL or "your-project-ref" in SUPABASE_URL:
     )
     st.stop()
 
-if "your_anon_key_here" in SUPABASE_ANON_KEY:
+if "your_anon_key_here" in SUPABASE_ANON_KEY.lower():
     st.error(
         "SUPABASE_ANON_KEY in .streamlit/secrets.toml is still a placeholder. "
         "Use your real anon/publishable key from Supabase Settings > API."
