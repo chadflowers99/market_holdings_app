@@ -1,5 +1,7 @@
 from datetime import datetime
+import csv
 import json
+import io
 import tempfile
 from pathlib import Path
 
@@ -544,6 +546,17 @@ with st.expander("Show Trade History", expanded=False):
 
             if filtered_rows:
                 st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
+                csv_buffer = io.StringIO()
+                csv_writer = csv.DictWriter(csv_buffer, fieldnames=["ACTION", "SYMBOL", "QTY", "PRICE"])
+                csv_writer.writeheader()
+                csv_writer.writerows(filtered_rows)
+                st.download_button(
+                    "Download CSV",
+                    data=csv_buffer.getvalue(),
+                    file_name="trade_history.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
             else:
                 st.caption("No trade history matches the current filters.")
         else:
