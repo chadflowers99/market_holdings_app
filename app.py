@@ -753,11 +753,18 @@ with st.expander("Trade History", expanded=False):
                             format="%.2f",
                             value=float(selected_trade.get("price", 0.0) or 0.0),
                         )
-                        save_trade_col, delete_trade_col = st.columns(2)
+                        confirm_delete_all = st.checkbox(
+                            "Confirm delete all trades",
+                            value=False,
+                            help="This permanently removes your entire trade history and resets holdings.",
+                        )
+                        save_trade_col, delete_trade_col, delete_all_col = st.columns(3)
                         with save_trade_col:
                             save_trade_edit = st.form_submit_button("Save Changes", use_container_width=True)
                         with delete_trade_col:
                             delete_trade_edit = st.form_submit_button("Delete Trade", use_container_width=True)
+                        with delete_all_col:
+                            delete_all_trades = st.form_submit_button("Delete All", use_container_width=True)
 
                     if save_trade_edit:
                         try:
@@ -781,6 +788,17 @@ with st.expander("Trade History", expanded=False):
                             st.rerun()
                         except Exception as e:
                             st.error(f"Failed to delete trade: {str(e)}")
+                    elif delete_all_trades:
+                        if not confirm_delete_all:
+                            st.warning("Enable 'Confirm delete all trades' before deleting everything.")
+                        else:
+                            try:
+                                supabase.table("permanent_ledger").delete().eq("user_id", user_id).execute()
+                                rebuild_portfolio_from_ledger(user_id)
+                                st.success("All trades deleted and portfolio reset.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to delete all trades: {str(e)}")
             else:
                 st.caption("No trade history matches the current filters.")
         else:
