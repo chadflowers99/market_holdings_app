@@ -614,7 +614,7 @@ else:
     st.info("No active lots (Your portfolio is empty).")
 
 st.markdown("### Trade History")
-with st.expander("Show Trade History", expanded=False):
+with st.expander("Trade History", expanded=False):
     try:
         user_id = st.session_state.user.id
         ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).order("timestamp", desc=True).execute()
@@ -730,9 +730,7 @@ with st.expander("Show Trade History", expanded=False):
                     use_container_width=True,
                 )
 
-                show_edit_trade = st.toggle("Show edit selected trade", value=False, key="trade_history_show_edit_trade")
-                if show_edit_trade:
-                    st.markdown("#### Edit Selected Trade")
+                with st.expander("Edit Trade", expanded=False):
                     trade_choices = list(range(len(filtered_records)))
                     selected_trade_index = st.selectbox(
                         "Choose trade",
