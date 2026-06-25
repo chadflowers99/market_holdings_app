@@ -521,13 +521,16 @@ def rebuild_portfolio_from_ledger(user_id):
         save_portfolio_row(lot)
 
 
-def _ledger_display_label(record, index):
+def _ledger_display_label(record):
     """Human-friendly label for selecting a trade row to edit."""
     action = str(record.get("action", "")).upper()
     symbol = str(record.get("symbol", ""))
     quantity = int(record.get("quantity", 0) or 0)
     price = float(record.get("price", 0) or 0)
-    return f"{index + 1}. {action} {symbol} {quantity} @ ${price:.2f}"
+    trade_date = str(record.get("timestamp", ""))[:10]
+    if trade_date:
+        return f"{action} {symbol} {quantity} @ ${price:.2f} | {trade_date}"
+    return f"{action} {symbol} {quantity} @ ${price:.2f}"
 
 
 # Main App
@@ -726,14 +729,28 @@ with st.expander("Trade History", expanded=False):
                 )
 
                 with st.expander("Edit Trade", expanded=False):
-                    trade_choices = list(range(len(filtered_records)))
-                    selected_trade_index = st.selectbox(
+                    trade_choice_map = {}
+                    trade_choices = []
+                    for idx, item in enumerate(filtered_records):
+                        record = item["_record"]
+                        record_id = record.get("id")
+                        if record_id:
+                            choice_key = f"id:{record_id}"
+                        else:
+                            choice_key = (
+                                f"fallback:{idx}:{record.get('timestamp', '')}:{record.get('action', '')}:"
+                                f"{record.get('symbol', '')}:{record.get('quantity', '')}:{record.get('price', '')}"
+                            )
+                        trade_choices.append(choice_key)
+                        trade_choice_map[choice_key] = record
+
+                    selected_trade_key = st.selectbox(
                         "Choose trade",
                         trade_choices,
-                        format_func=lambda idx: _ledger_display_label(filtered_records[idx]["_record"], idx),
+                        format_func=lambda choice: _ledger_display_label(trade_choice_map[choice]),
                         key="trade_history_edit_choice",
                     )
-                    selected_trade = filtered_records[selected_trade_index]["_record"]
+                    selected_trade = trade_choice_map[selected_trade_key]
 
                     with st.form("edit_trade_form"):
                         current_action = str(selected_trade.get("action", "")).upper()
