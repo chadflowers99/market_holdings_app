@@ -536,7 +536,12 @@ def _ledger_display_label(record):
 # Main App
 st.set_page_config(page_title="portfolio brand", layout="centered")
 st.markdown(
-    "# <span style='color: #2ecc71;'>**portfolio**</span> <span style='color: #000000;'>**brand**</span>",
+    """
+    <h1 style='margin: 0; line-height: 1.1;'>
+        <span style='color: #2ecc71; vertical-align: baseline;'>portfolio</span>
+        <span style='color: #000000; vertical-align: baseline;'>brand</span>
+    </h1>
+    """,
     unsafe_allow_html=True,
 )
 
