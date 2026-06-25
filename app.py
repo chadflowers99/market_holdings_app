@@ -601,24 +601,20 @@ with st.expander("Show Trade History", expanded=False):
             available_dates = []
             for record in ledger_response.data:
                 timestamp_value = record.get("timestamp", "")
-                try:
-                    parsed_timestamp = datetime.fromisoformat(str(timestamp_value).replace("Z", "+00:00"))
-                except ValueError:
-                    parsed_timestamp = None
-
-                if parsed_timestamp is None:
+                parsed_date = None
+                timestamp_text = str(timestamp_value)
+                # Use the literal YYYY-MM-DD prefix from the stored timestamp for stable filtering.
+                if len(timestamp_text) >= 10:
                     try:
-                        parsed_timestamp = datetime.strptime(str(timestamp_value)[:10], "%Y-%m-%d")
+                        parsed_date = datetime.strptime(timestamp_text[:10], "%Y-%m-%d").date()
                     except ValueError:
-                        parsed_timestamp = None
-
-                parsed_date = parsed_timestamp.date() if parsed_timestamp else None
+                        parsed_date = None
                 if parsed_date:
                     available_dates.append(parsed_date)
 
                 row = {
                     "_record": dict(record),
-                    "TIMESTAMP": timestamp_value,
+                    "TRADE DATE": parsed_date.isoformat() if parsed_date else "",
                     "ACTION": record.get("action", "").upper(),
                     "SYMBOL": record.get("symbol", ""),
                     "QTY": record.get("quantity", 0),
@@ -690,6 +686,7 @@ with st.expander("Show Trade History", expanded=False):
                     continue
                 filtered_records.append(row)
                 filtered_rows.append({
+                    "TRADE DATE": row["TRADE DATE"],
                     "ACTION": row["ACTION"],
                     "SYMBOL": row["SYMBOL"],
                     "QTY": row["QTY"],
@@ -700,7 +697,7 @@ with st.expander("Show Trade History", expanded=False):
                 st.caption(f"Showing {len(filtered_rows)} of {len(history_rows)} trades")
                 st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
                 csv_buffer = io.StringIO()
-                csv_writer = csv.DictWriter(csv_buffer, fieldnames=["ACTION", "SYMBOL", "QTY", "PRICE"])
+                csv_writer = csv.DictWriter(csv_buffer, fieldnames=["TRADE DATE", "ACTION", "SYMBOL", "QTY", "PRICE"])
                 csv_writer.writeheader()
                 csv_writer.writerows(filtered_rows)
                 st.download_button(
