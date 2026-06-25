@@ -534,7 +534,11 @@ def _ledger_display_label(record):
 
 
 # Main App
-st.set_page_config(layout="centered")
+st.set_page_config(page_title="portfolio brand", layout="centered")
+st.markdown(
+    "# <span style='color: #2ecc71;'>**portfolio**</span> <span style='color: #000000;'>**brand**</span>",
+    unsafe_allow_html=True,
+)
 
 # Authentication
 user = auth_ui()
