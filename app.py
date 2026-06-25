@@ -537,8 +537,8 @@ def _ledger_display_label(record):
 st.set_page_config(page_title="portfolio", layout="centered")
 st.markdown(
     "# <span style='color: #2ecc71;'>**portfolio**</span> "
-    "<sub style='font-size: 0.85rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.78;'>"
-    "portfolio brand"
+    "<sub style='font-size: 0.85rem; letter-spacing: 0.08em; text-transform: uppercase; color: #000000;'>"
+    "brand"
     "</sub>",
     unsafe_allow_html=True,
 )
