@@ -539,7 +539,7 @@ st.markdown(
             open <span style='color: #2ecc71;'>positions.</span>
         </div>
         <div style='font-size: 0.85rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.78;'>
-            live lot journal
+            LIVE LOT HOLDINGS
         </div>
     </div>
     """,
