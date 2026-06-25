@@ -538,7 +538,7 @@ st.set_page_config(page_title="portfolio brand", layout="centered")
 st.markdown(
     """
     <div style='padding: 0.25rem 0 0.55rem 0; border-bottom: 2px solid rgba(46, 204, 113, 0.25);'>
-        <h1 style='margin: 0; line-height: 1.05; letter-spacing: 0.015em; font-weight: 800;'><span style='color: #2ecc71; font-family: "Courier New", monospace; font-size: 2rem;'>Portfolio</span><span style='color: #8a8a8a; display: inline-block; transform: translateY(0.14em); margin-left: 0.08em; font-family: "Segoe UI", sans-serif; font-size: 1.8rem;'>brand.</span></h1>
+        <h1 style='margin: 0; line-height: 1.05; letter-spacing: 0.015em; font-weight: 400;'><span style='color: #2ecc71; font-family: "Courier New", monospace; font-size: 2rem; font-weight: 800;'>Portfolio</span><span style='color: #8a8a8a; display: inline-block; transform: translateY(0.14em); margin-left: 0.08em; font-family: "Segoe UI", sans-serif; font-size: 1.8rem; font-weight: 400;'>brand.</span></h1>
         <div style='font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: #666666;'>
             LIVE LOT POSITION.
         </div>
