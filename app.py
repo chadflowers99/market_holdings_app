@@ -541,7 +541,7 @@ def _ledger_display_label(record, index):
 
 # Main App
 st.set_page_config(page_title="Stock Tracker", layout="centered")
-st.title("Stock Trade Journal")
+st.title("JTRADE")
 
 # Authentication
 user = auth_ui()
