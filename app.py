@@ -175,6 +175,7 @@ def auth_ui():
             f"GitHub login failed: {oauth_error}"
             + (f" ({oauth_error_description})" if oauth_error_description else "")
         )
+        st.query_params.clear()
 
     # Handle OAuth callback from Supabase (PKCE flow).
     auth_code = st.query_params.get("code")
@@ -188,8 +189,10 @@ def auth_ui():
                 st.rerun()
             else:
                 st.error("GitHub login failed: no user returned from Supabase callback.")
+                st.query_params.clear()
         except Exception as e:
             st.error(f"GitHub login callback failed: {str(e)}")
+            st.query_params.clear()
 
     st.markdown("### Authentication")
     auth_tab1, auth_tab2, auth_tab3, auth_tab4 = st.tabs(["Login", "Sign Up", "GitHub", "Google"])
@@ -229,60 +232,68 @@ def auth_ui():
                 st.error(f"Sign up failed: {str(e)}")
 
     with auth_tab3:
-        # Cache OAuth URL in session_state to avoid regenerating verifier on every rerun
-        if "github_oauth_url" not in st.session_state:
-            current_url = getattr(st.context, "url", None)
-            oauth_payload = {"provider": "github"}
-            redirect_to = None
-            if current_url:
-                redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
-                oauth_payload["options"] = {"redirect_to": redirect_to}
+        # Skip if in callback flow to prevent regenerating verifier
+        if not st.query_params.get("code") and not st.query_params.get("error"):
+            # Cache OAuth URL in session_state to avoid regenerating verifier on every rerun
+            if "github_oauth_url" not in st.session_state:
+                current_url = getattr(st.context, "url", None)
+                oauth_payload = {"provider": "github"}
+                redirect_to = None
+                if current_url:
+                    redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
+                    oauth_payload["options"] = {"redirect_to": redirect_to}
 
-            oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
-            st.session_state.github_oauth_url = oauth_response.url
-            st.session_state.github_redirect_to = redirect_to
-        else:
-            redirect_to = st.session_state.get("github_redirect_to")
+                oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
+                st.session_state.github_oauth_url = oauth_response.url
+                st.session_state.github_redirect_to = redirect_to
+            else:
+                redirect_to = st.session_state.get("github_redirect_to")
 
-        authorize_url = st.session_state.github_oauth_url
-        st.write("Use your GitHub account to sign in.")
-        if redirect_to:
-            st.caption(f"GitHub will redirect back to: {redirect_to}")
+            authorize_url = st.session_state.github_oauth_url
+            st.write("Use your GitHub account to sign in.")
+            if redirect_to:
+                st.caption(f"GitHub will redirect back to: {redirect_to}")
+            else:
+                st.caption("GitHub will redirect using Supabase Auth Site/Redirect URL settings.")
+            st.link_button("Continue with GitHub", authorize_url, use_container_width=True)
+            st.caption(
+                "If this does not work, enable GitHub in Supabase Auth Providers and add your app URL"
+                " to Supabase Redirect URLs."
+            )
         else:
-            st.caption("GitHub will redirect using Supabase Auth Site/Redirect URL settings.")
-        st.link_button("Continue with GitHub", authorize_url, use_container_width=True)
-        st.caption(
-            "If this does not work, enable GitHub in Supabase Auth Providers and add your app URL"
-            " to Supabase Redirect URLs."
-        )
+            st.info("Processing GitHub login callback...")
 
     with auth_tab4:
-        # Cache OAuth URL in session_state to avoid regenerating verifier on every rerun
-        if "google_oauth_url" not in st.session_state:
-            current_url = getattr(st.context, "url", None)
-            oauth_payload = {"provider": "google"}
-            redirect_to = None
-            if current_url:
-                redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
-                oauth_payload["options"] = {"redirect_to": redirect_to}
+        # Skip if in callback flow to prevent regenerating verifier
+        if not st.query_params.get("code") and not st.query_params.get("error"):
+            # Cache OAuth URL in session_state to avoid regenerating verifier on every rerun
+            if "google_oauth_url" not in st.session_state:
+                current_url = getattr(st.context, "url", None)
+                oauth_payload = {"provider": "google"}
+                redirect_to = None
+                if current_url:
+                    redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
+                    oauth_payload["options"] = {"redirect_to": redirect_to}
 
-            oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
-            st.session_state.google_oauth_url = oauth_response.url
-            st.session_state.google_redirect_to = redirect_to
-        else:
-            redirect_to = st.session_state.get("google_redirect_to")
+                oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
+                st.session_state.google_oauth_url = oauth_response.url
+                st.session_state.google_redirect_to = redirect_to
+            else:
+                redirect_to = st.session_state.get("google_redirect_to")
 
-        authorize_url = st.session_state.google_oauth_url
-        st.write("Use your Google account to sign in.")
-        if redirect_to:
-            st.caption(f"Google will redirect back to: {redirect_to}")
+            authorize_url = st.session_state.google_oauth_url
+            st.write("Use your Google account to sign in.")
+            if redirect_to:
+                st.caption(f"Google will redirect back to: {redirect_to}")
+            else:
+                st.caption("Google will redirect using Supabase Auth Site/Redirect URL settings.")
+            st.link_button("Continue with Google", authorize_url, use_container_width=True)
+            st.caption(
+                "If this does not work, enable Google in Supabase Auth Providers and add your app URL"
+                " to Supabase Redirect URLs."
+            )
         else:
-            st.caption("Google will redirect using Supabase Auth Site/Redirect URL settings.")
-        st.link_button("Continue with Google", authorize_url, use_container_width=True)
-        st.caption(
-            "If this does not work, enable Google in Supabase Auth Providers and add your app URL"
-            " to Supabase Redirect URLs."
-        )
+            st.info("Processing Google login callback...")
 
     return None
 
