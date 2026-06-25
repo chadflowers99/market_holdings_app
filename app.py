@@ -195,7 +195,7 @@ def auth_ui():
             st.query_params.clear()
 
     st.markdown("### Authentication")
-    auth_tab1, auth_tab2, auth_tab3, auth_tab4 = st.tabs(["Login", "Sign Up", "GitHub", "Google"])
+    auth_tab1, auth_tab2, auth_tab3 = st.tabs(["Login", "Sign Up", "Google"])
 
     with auth_tab1:
         email = st.text_input("Email", key="login_email")
@@ -232,38 +232,6 @@ def auth_ui():
                 st.error(f"Sign up failed: {str(e)}")
 
     with auth_tab3:
-        # Skip if in callback flow to prevent regenerating verifier
-        if not st.query_params.get("code") and not st.query_params.get("error"):
-            # Cache OAuth URL in session_state to avoid regenerating verifier on every rerun
-            if "github_oauth_url" not in st.session_state:
-                current_url = getattr(st.context, "url", None)
-                oauth_payload = {"provider": "github"}
-                redirect_to = None
-                if current_url:
-                    redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
-                    oauth_payload["options"] = {"redirect_to": redirect_to}
-
-                oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
-                st.session_state.github_oauth_url = oauth_response.url
-                st.session_state.github_redirect_to = redirect_to
-            else:
-                redirect_to = st.session_state.get("github_redirect_to")
-
-            authorize_url = st.session_state.github_oauth_url
-            st.write("Use your GitHub account to sign in.")
-            if redirect_to:
-                st.caption(f"GitHub will redirect back to: {redirect_to}")
-            else:
-                st.caption("GitHub will redirect using Supabase Auth Site/Redirect URL settings.")
-            st.link_button("Continue with GitHub", authorize_url, use_container_width=True)
-            st.caption(
-                "If this does not work, enable GitHub in Supabase Auth Providers and add your app URL"
-                " to Supabase Redirect URLs."
-            )
-        else:
-            st.info("Processing GitHub login callback...")
-
-    with auth_tab4:
         # Skip if in callback flow to prevent regenerating verifier
         if not st.query_params.get("code") and not st.query_params.get("error"):
             # Cache OAuth URL in session_state to avoid regenerating verifier on every rerun
