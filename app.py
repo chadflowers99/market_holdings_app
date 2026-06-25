@@ -653,21 +653,13 @@ with st.expander("Trade History", expanded=False):
             with filter_col3:
                 date_filter_mode = st.selectbox(
                     "Date filter",
-                    ["All dates", "On date", "Date range"],
+                    ["All dates", "Date range"],
                     key="trade_history_date_filter_mode",
                 )
                 start_date_filter = None
                 end_date_filter = None
 
-                if date_filter_mode == "On date":
-                    selected_day = st.date_input(
-                        "Date",
-                        value=datetime.now().date(),
-                        key="trade_history_single_date_filter",
-                    )
-                    start_date_filter = selected_day
-                    end_date_filter = selected_day
-                elif date_filter_mode == "Date range":
+                if date_filter_mode == "Date range":
                     if available_dates:
                         min_date = min(available_dates)
                         max_date = max(available_dates)
