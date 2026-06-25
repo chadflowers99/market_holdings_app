@@ -531,8 +531,8 @@ def _ledger_display_label(record, index):
 
 
 # Main App
-st.set_page_config(page_title="portfolio", layout="centered")
-st.markdown("# <span style='color: #2ecc71;'>**portfolio**</span> <sub>brand.</sub>", unsafe_allow_html=True)
+st.set_page_config(page_title="open positions", layout="centered")
+st.markdown("# **open** <span style='color: #2ecc71;'>**positions.**</span>", unsafe_allow_html=True)
 
 # Authentication
 user = auth_ui()
