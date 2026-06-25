@@ -229,16 +229,22 @@ def auth_ui():
                 st.error(f"Sign up failed: {str(e)}")
 
     with auth_tab3:
-        current_url = getattr(st.context, "url", None)
-        oauth_payload = {"provider": "github"}
-        redirect_to = None
-        if current_url:
-            redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
-            oauth_payload["options"] = {"redirect_to": redirect_to}
+        # Cache OAuth URL in session_state to avoid regenerating verifier on every rerun
+        if "github_oauth_url" not in st.session_state:
+            current_url = getattr(st.context, "url", None)
+            oauth_payload = {"provider": "github"}
+            redirect_to = None
+            if current_url:
+                redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
+                oauth_payload["options"] = {"redirect_to": redirect_to}
 
-        oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
-        authorize_url = oauth_response.url
+            oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
+            st.session_state.github_oauth_url = oauth_response.url
+            st.session_state.github_redirect_to = redirect_to
+        else:
+            redirect_to = st.session_state.get("github_redirect_to")
 
+        authorize_url = st.session_state.github_oauth_url
         st.write("Use your GitHub account to sign in.")
         if redirect_to:
             st.caption(f"GitHub will redirect back to: {redirect_to}")
@@ -251,16 +257,22 @@ def auth_ui():
         )
 
     with auth_tab4:
-        current_url = getattr(st.context, "url", None)
-        oauth_payload = {"provider": "google"}
-        redirect_to = None
-        if current_url:
-            redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
-            oauth_payload["options"] = {"redirect_to": redirect_to}
+        # Cache OAuth URL in session_state to avoid regenerating verifier on every rerun
+        if "google_oauth_url" not in st.session_state:
+            current_url = getattr(st.context, "url", None)
+            oauth_payload = {"provider": "google"}
+            redirect_to = None
+            if current_url:
+                redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
+                oauth_payload["options"] = {"redirect_to": redirect_to}
 
-        oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
-        authorize_url = oauth_response.url
+            oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
+            st.session_state.google_oauth_url = oauth_response.url
+            st.session_state.google_redirect_to = redirect_to
+        else:
+            redirect_to = st.session_state.get("google_redirect_to")
 
+        authorize_url = st.session_state.google_oauth_url
         st.write("Use your Google account to sign in.")
         if redirect_to:
             st.caption(f"Google will redirect back to: {redirect_to}")
