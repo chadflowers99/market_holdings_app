@@ -535,7 +535,13 @@ def _ledger_display_label(record):
 
 # Main App
 st.set_page_config(page_title="portfolio", layout="centered")
-st.markdown("# <span style='color: #2ecc71;'>**portfolio**</span> <sub>open positons</sub>", unsafe_allow_html=True)
+st.markdown(
+    "# <span style='color: #2ecc71;'>**portfolio**</span> "
+    "<sub style='font-size: 0.85rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.78;'>"
+    "portfolio brand"
+    "</sub>",
+    unsafe_allow_html=True,
+)
 
 # Authentication
 user = auth_ui()
