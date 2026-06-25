@@ -633,35 +633,47 @@ with st.expander("Show Trade History", expanded=False):
             with filter_col2:
                 symbol_filter = st.text_input("Symbol", key="trade_history_symbol_filter").strip().upper()
             with filter_col3:
-                use_date_range_filter = st.toggle("Use date range", value=False, key="trade_history_use_date_range_filter")
+                date_filter_mode = st.selectbox(
+                    "Date filter",
+                    ["All dates", "On date", "Date range"],
+                    key="trade_history_date_filter_mode",
+                )
                 start_date_filter = None
                 end_date_filter = None
-                if use_date_range_filter and available_dates:
-                    min_date = min(available_dates)
-                    max_date = max(available_dates)
-                    today = datetime.now().date()
-                    default_date = today if min_date <= today <= max_date else max_date
 
-                    date_col1, date_col2 = st.columns(2)
-                    with date_col1:
-                        start_date_filter = st.date_input(
-                            "From date",
-                            value=default_date,
-                            min_value=min_date,
-                            max_value=max_date,
-                            key="trade_history_start_date_filter_v2",
-                        )
-                    with date_col2:
-                        end_date_filter = st.date_input(
-                            "End date",
-                            value=default_date,
-                            min_value=min_date,
-                            max_value=max_date,
-                            key="trade_history_end_date_filter_v2",
-                        )
-
-                    if start_date_filter and end_date_filter and start_date_filter > end_date_filter:
-                        start_date_filter, end_date_filter = end_date_filter, start_date_filter
+                if date_filter_mode == "On date":
+                    selected_day = st.date_input(
+                        "Date",
+                        value=datetime.now().date(),
+                        key="trade_history_single_date_filter",
+                    )
+                    start_date_filter = selected_day
+                    end_date_filter = selected_day
+                elif date_filter_mode == "Date range":
+                    if available_dates:
+                        min_date = min(available_dates)
+                        max_date = max(available_dates)
+                        date_col1, date_col2 = st.columns(2)
+                        with date_col1:
+                            start_date_filter = st.date_input(
+                                "From date",
+                                value=min_date,
+                                min_value=min_date,
+                                max_value=max_date,
+                                key="trade_history_start_date_filter_v3",
+                            )
+                        with date_col2:
+                            end_date_filter = st.date_input(
+                                "End date",
+                                value=max_date,
+                                min_value=min_date,
+                                max_value=max_date,
+                                key="trade_history_end_date_filter_v3",
+                            )
+                        if start_date_filter and end_date_filter and start_date_filter > end_date_filter:
+                            start_date_filter, end_date_filter = end_date_filter, start_date_filter
+                    else:
+                        st.caption("No valid trade dates found for range filtering.")
 
             filtered_rows = []
             filtered_records = []
@@ -670,7 +682,7 @@ with st.expander("Show Trade History", expanded=False):
                     continue
                 if symbol_filter and row["SYMBOL"].upper() != symbol_filter:
                     continue
-                if use_date_range_filter and row["_parsed_date"] is None:
+                if (start_date_filter or end_date_filter) and row["_parsed_date"] is None:
                     continue
                 if start_date_filter and row["_parsed_date"] and row["_parsed_date"] < start_date_filter:
                     continue
