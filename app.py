@@ -539,7 +539,7 @@ st.markdown(
     """
     <div style='padding: 0.4rem 0 0.7rem 0;'>
         <div style='font-size: 2.1rem; font-weight: 800; line-height: 1.05;'>
-            open <span style='color: #2ecc71;'>positions.</span>
+            <span style='color: #2ecc71;'>O</span>pen <span style='color: #2ecc71;'>positions.</span>
         </div>
         <div style='font-size: 0.85rem; letter-spacing: 0.08em; text-transform: uppercase; opacity: 0.78;'>
             LIVE LOT HOLDINGS
