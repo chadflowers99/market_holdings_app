@@ -529,8 +529,8 @@ def _ledger_display_label(record):
     price = float(record.get("price", 0) or 0)
     trade_date = str(record.get("timestamp", ""))[:10]
     if trade_date:
-        return f"{action} {symbol} {quantity} @ ${price:.2f} | {trade_date}"
-    return f"{action} {symbol} {quantity} @ ${price:.2f}"
+        return f"{trade_date} | {action} | {symbol} | {quantity} | ${price:.2f}"
+    return f"{action} | {symbol} | {quantity} | ${price:.2f}"
 
 
 # Main App
