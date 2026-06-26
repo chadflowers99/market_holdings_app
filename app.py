@@ -172,7 +172,7 @@ def auth_ui():
     oauth_error_description = st.query_params.get("error_description")
     if oauth_error:
         st.error(
-            f"GitHub login failed: {oauth_error}"
+            f"Login attempt failed: {oauth_error}"
             + (f" ({oauth_error_description})" if oauth_error_description else "")
         )
         st.query_params.clear()
@@ -188,10 +188,10 @@ def auth_ui():
                 st.query_params.clear()
                 st.rerun()
             else:
-                st.error("GitHub login failed: no user returned from Supabase callback.")
+                st.error("Login attempt failed: no user returned from Supabase callback.")
                 st.query_params.clear()
         except Exception as e:
-            st.error(f"GitHub login callback failed: {str(e)}")
+            st.error(f"Login attempt failed: {str(e)}")
             st.query_params.clear()
 
     st.markdown("### Authentication")
@@ -213,7 +213,7 @@ def auth_ui():
                 st.session_state.access_token = response.session.access_token
                 st.rerun()
             except Exception as e:
-                st.error(f"Login failed: {str(e)}")
+                st.error(f"Login attempt failed: {str(e)}")
 
     with auth_tab2:
         email = st.text_input("Email", key="signup_email")
@@ -533,8 +533,58 @@ def _ledger_display_label(record):
     return f"{action} | {symbol} | {quantity} | ${price:.2f}"
 
 
+def _parse_positive_int(value, field_name):
+    try:
+        parsed = int(str(value).strip())
+        if parsed < 1:
+            raise ValueError
+        return parsed, None
+    except Exception:
+        return None, f"{field_name} must be a whole number greater than 0."
+
+
+def _parse_positive_float(value, field_name):
+    try:
+        parsed = float(str(value).strip())
+        if parsed < 0.01:
+            raise ValueError
+        return parsed, None
+    except Exception:
+        return None, f"{field_name} must be a number greater than 0.00."
+
+
 # Main App
 st.set_page_config(page_title="portfolio brand", layout="centered")
+st.markdown(
+    """
+    <style>
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button {
+        -webkit-appearance: none;
+        margin: 0;
+    }
+    input[type=number] {
+        -moz-appearance: textfield;
+        appearance: textfield;
+    }
+    div[data-baseweb="input"] [data-testid="stNumberInputStepUp"],
+    div[data-baseweb="input"] [data-testid="stNumberInputStepDown"],
+    div[data-baseweb="input"] button[aria-label="Increment value"],
+    div[data-baseweb="input"] button[aria-label="Decrement value"],
+    div[data-baseweb="input"] button[title="Increment"],
+    div[data-baseweb="input"] button[title="Decrement"] {
+        display: none !important;
+        visibility: hidden !important;
+        width: 0 !important;
+        min-width: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        border: 0 !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 st.markdown(
     """
     <div style='padding: 0.25rem 0 0.55rem 0; border-bottom: 2px solid rgba(46, 204, 113, 0.25);'>
@@ -571,9 +621,9 @@ with st.form("trade_form", clear_on_submit=True):
     with col1:
         sym_input = st.text_input("Stock Symbol").upper()
     with col2:
-        qty_input = st.number_input("Quantity", min_value=1, step=1)
+        qty_input = st.text_input("Quantity")
     with col3:
-        price_input = st.number_input("Price per Share", min_value=0.01, step=0.01, format="%.2f")
+        price_input = st.text_input("Price per Share")
 
     btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
@@ -581,20 +631,28 @@ with st.form("trade_form", clear_on_submit=True):
     with btn_col2:
         submit_sell = st.form_submit_button("Log Sell", use_container_width=True)
 
-if (submit_buy or submit_sell) and not sym_input:
-    st.warning("Please enter a stock symbol.")
-elif submit_buy:
-    ok, msg = handle_trade("buy", sym_input, int(qty_input), float(price_input))
-    if ok:
-        st.success(msg)
+if submit_buy or submit_sell:
+    if not sym_input:
+        st.warning("Please enter a stock symbol.")
     else:
-        st.error(msg)
-elif submit_sell:
-    ok, msg = handle_trade("sell", sym_input, int(qty_input), float(price_input))
-    if ok:
-        st.success(msg)
-    else:
-        st.error(msg)
+        parsed_qty, qty_error = _parse_positive_int(qty_input, "Quantity")
+        parsed_price, price_error = _parse_positive_float(price_input, "Price per Share")
+        if qty_error:
+            st.error(qty_error)
+        elif price_error:
+            st.error(price_error)
+        elif submit_buy:
+            ok, msg = handle_trade("buy", sym_input, parsed_qty, parsed_price)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+        elif submit_sell:
+            ok, msg = handle_trade("sell", sym_input, parsed_qty, parsed_price)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
 
 # Holdings Display
 st.markdown("### Current Holdings")
@@ -755,19 +813,8 @@ with st.expander("Trade History", expanded=False):
                         action_index = 0 if current_action == "BUY" else 1
                         edit_action = st.selectbox("Action", ["BUY", "SELL"], index=action_index)
                         edit_symbol = st.text_input("Symbol", value=str(selected_trade.get("symbol", ""))).strip().upper()
-                        edit_qty = st.number_input(
-                            "Quantity",
-                            min_value=1,
-                            step=1,
-                            value=int(selected_trade.get("quantity", 1) or 1),
-                        )
-                        edit_price = st.number_input(
-                            "Price",
-                            min_value=0.01,
-                            step=0.01,
-                            format="%.2f",
-                            value=float(selected_trade.get("price", 0.0) or 0.0),
-                        )
+                        edit_qty = st.text_input("Quantity", value=str(int(selected_trade.get("quantity", 1) or 1)))
+                        edit_price = st.text_input("Price", value=f"{float(selected_trade.get('price', 0.0) or 0.0):.2f}")
                         confirm_delete_all = st.checkbox(
                             "Confirm delete all trades",
                             value=False,
@@ -783,11 +830,17 @@ with st.expander("Trade History", expanded=False):
 
                     if save_trade_edit:
                         try:
+                            parsed_edit_qty, edit_qty_error = _parse_positive_int(edit_qty, "Quantity")
+                            parsed_edit_price, edit_price_error = _parse_positive_float(edit_price, "Price")
+                            if edit_qty_error:
+                                raise ValueError(edit_qty_error)
+                            if edit_price_error:
+                                raise ValueError(edit_price_error)
                             updated_record = {
                                 "action": edit_action,
                                 "symbol": edit_symbol,
-                                "quantity": int(edit_qty),
-                                "price": float(edit_price),
+                                "quantity": parsed_edit_qty,
+                                "price": parsed_edit_price,
                             }
                             _update_ledger_record(selected_trade, updated_record)
                             rebuild_portfolio_from_ledger(user_id)
