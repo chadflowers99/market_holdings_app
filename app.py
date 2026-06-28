@@ -587,8 +587,8 @@ st.markdown(
 )
 st.markdown(
     """
-    <div style='padding: 0.25rem 0 0.55rem 0; border-bottom: 2px solid rgba(46, 204, 113, 0.25);'>
-        <h1 style='margin: 0; line-height: 1.05; letter-spacing: 0.015em; font-weight: 400;'><span style='color: #2ecc71; font-family: "Courier New", monospace; font-size: 2rem; font-weight: 800;'>Portfolio</span><span style='color: #666666; font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; margin-left: 0.35em;'>brand</span></h1>
+    <div style='padding: 0.25rem 0 0.55rem 0; border-bottom: 2px solid rgba(0, 0, 0, 0.1);'>
+        <h1 style='margin: 0; line-height: 1.05; letter-spacing: 0.015em; font-weight: 400;'><span style='color: #262730; font-family: "Courier New", monospace; font-size: 2rem; font-weight: 800;'>Portfolio</span><span style='color: #666666; font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; margin-left: 0.35em;'>brand</span></h1>
         <div style='font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: #666666;'>
             OPEN LOT HOLDINGS
         </div>
