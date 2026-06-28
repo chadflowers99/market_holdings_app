@@ -588,7 +588,7 @@ st.markdown(
 st.markdown(
     """
     <div>
-        <h1>Portfolio brand</h1>
+        <h1>Portfolio brand.</h1>
         <div>
             OPEN LOT HOLDINGS
         </div>
