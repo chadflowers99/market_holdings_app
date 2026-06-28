@@ -132,6 +132,15 @@ def _build_auth_storage():
     return MemoryAuthStorage()
 
 
+def clear_auth_storage_files() -> None:
+    """Best-effort reset for local auth storage files used by PKCE state."""
+    for path in (AUTH_STORAGE_FILE, AUTH_STORAGE_FILE_FALLBACK):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
 # Initialize Supabase client with appropriate storage backend.
 @st.cache_resource
 def get_supabase_client() -> Client:
@@ -154,6 +163,13 @@ def auth_ui():
     if "user" not in st.session_state:
         st.session_state.user = None
 
+    # One-time auth state cleanup to avoid stale PKCE verifier/url from prior runs.
+    if "oauth_state_initialized" not in st.session_state:
+        clear_auth_storage_files()
+        st.session_state.pop("google_oauth_url", None)
+        st.session_state.pop("google_redirect_to", None)
+        st.session_state.oauth_state_initialized = True
+
     if st.session_state.user:
         return st.session_state.user
 
@@ -171,6 +187,10 @@ def auth_ui():
     oauth_error = st.query_params.get("error")
     oauth_error_description = st.query_params.get("error_description")
     if oauth_error:
+        # If Google callback fails once, clear stale PKCE/url artifacts so next click is fresh.
+        clear_auth_storage_files()
+        st.session_state.pop("google_oauth_url", None)
+        st.session_state.pop("google_redirect_to", None)
         st.error(
             f"Login attempt failed: {oauth_error}"
             + (f" ({oauth_error_description})" if oauth_error_description else "")
@@ -188,9 +208,15 @@ def auth_ui():
                 st.query_params.clear()
                 st.rerun()
             else:
+                clear_auth_storage_files()
+                st.session_state.pop("google_oauth_url", None)
+                st.session_state.pop("google_redirect_to", None)
                 st.error("Login attempt failed: no user returned from Supabase callback.")
                 st.query_params.clear()
         except Exception as e:
+            clear_auth_storage_files()
+            st.session_state.pop("google_oauth_url", None)
+            st.session_state.pop("google_redirect_to", None)
             st.error(f"Login attempt failed: {str(e)}")
             st.query_params.clear()
 
@@ -234,28 +260,21 @@ def auth_ui():
     with auth_tab3:
         # Skip if in callback flow to prevent regenerating verifier
         if not st.query_params.get("code") and not st.query_params.get("error"):
-            # Cache OAuth URL in session_state to avoid regenerating verifier on every rerun
-            if "google_oauth_url" not in st.session_state:
-                current_url = getattr(st.context, "url", None)
-                oauth_payload = {"provider": "google"}
-                redirect_to = None
-                if current_url:
-                    redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
-                    oauth_payload["options"] = {"redirect_to": redirect_to}
+            oauth_payload = {"provider": "google"}
+            redirect_to = "http://localhost:8502/"
+            oauth_payload["options"] = {"redirect_to": redirect_to}
 
-                oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
-                st.session_state.google_oauth_url = oauth_response.url
-                st.session_state.google_redirect_to = redirect_to
-            else:
-                redirect_to = st.session_state.get("google_redirect_to")
-
-            authorize_url = st.session_state.google_oauth_url
             st.write("Use your Google account to sign in.")
-            if redirect_to:
-                st.caption(f"Google will redirect back to: {redirect_to}")
-            else:
-                st.caption("Google will redirect using Supabase Auth Site/Redirect URL settings.")
-            st.link_button("Continue with Google", authorize_url, use_container_width=True)
+            st.caption(f"Google will redirect back to: {redirect_to}")
+
+            if st.button("Continue with Google", key="google_login_button", width="stretch"):
+                oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
+                st.markdown(
+                    f"<meta http-equiv='refresh' content='0; url={oauth_response.url}'>",
+                    unsafe_allow_html=True,
+                )
+                st.stop()
+
             st.caption(
                 "If this does not work, enable Google in Supabase Auth Providers and add your app URL"
                 " to Supabase Redirect URLs."
@@ -557,39 +576,9 @@ def _parse_positive_float(value, field_name):
 st.set_page_config(page_title="portfolio brand", layout="centered")
 st.markdown(
     """
-    <style>
-    input[type=number]::-webkit-outer-spin-button,
-    input[type=number]::-webkit-inner-spin-button {
-        -webkit-appearance: none;
-        margin: 0;
-    }
-    input[type=number] {
-        -moz-appearance: textfield;
-        appearance: textfield;
-    }
-    div[data-baseweb="input"] [data-testid="stNumberInputStepUp"],
-    div[data-baseweb="input"] [data-testid="stNumberInputStepDown"],
-    div[data-baseweb="input"] button[aria-label="Increment value"],
-    div[data-baseweb="input"] button[aria-label="Decrement value"],
-    div[data-baseweb="input"] button[title="Increment"],
-    div[data-baseweb="input"] button[title="Decrement"] {
-        display: none !important;
-        visibility: hidden !important;
-        width: 0 !important;
-        min-width: 0 !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        border: 0 !important;
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
-st.markdown(
-    """
-    <div style='padding: 0.25rem 0 0.55rem 0; border-bottom: 2px solid rgba(46, 204, 113, 0.25);'>
-        <h1 style='margin: 0; line-height: 1.05; letter-spacing: 0.015em; font-weight: 400;'><span style='color: #2ecc71; font-family: "Courier New", monospace; font-size: 2rem; font-weight: 800;'>Portfolio</span><span style='color: #666666; font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; margin-left: 0.35em;'>brand</span></h1>
-        <div style='font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: #666666;'>
+    <div>
+        <h1 style='margin: 0; line-height: 1.05;'>Portfolio brand.</h1>
+        <div style='font-size: 0.72rem;'>
             OPEN LOT HOLDINGS
         </div>
     </div>
@@ -601,8 +590,6 @@ st.markdown(
 user = auth_ui()
 if not user:
     st.stop()
-
-st.caption("Cloud-synced lot-level trading with RLS security.")
 
 st.markdown(f"**Logged in as:** {user.email}")
 if st.button("Log Out"):
@@ -627,9 +614,9 @@ with st.form("trade_form", clear_on_submit=True):
 
     btn_col1, btn_col2 = st.columns(2)
     with btn_col1:
-        submit_buy = st.form_submit_button("Log Buy", use_container_width=True)
+        submit_buy = st.form_submit_button("Log Buy", width="stretch")
     with btn_col2:
-        submit_sell = st.form_submit_button("Log Sell", use_container_width=True)
+        submit_sell = st.form_submit_button("Log Sell", width="stretch")
 
 if submit_buy or submit_sell:
     if not sym_input:
@@ -671,7 +658,7 @@ if current_portfolio:
                 "PRICE": round(lot["avg_price"], 2),
             }
         )
-    st.dataframe(display_rows, use_container_width=True, hide_index=True)
+    st.dataframe(display_rows, width="stretch", hide_index=True)
 else:
     st.info("No active lots (Your portfolio is empty).")
 
@@ -771,7 +758,7 @@ with st.expander("Trade History", expanded=False):
 
             if filtered_rows:
                 st.caption(f"Showing {len(filtered_rows)} of {len(history_rows)} trades")
-                st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
+                st.dataframe(filtered_rows, width="stretch", hide_index=True)
                 csv_buffer = io.StringIO()
                 csv_writer = csv.DictWriter(csv_buffer, fieldnames=["TRADE DATE", "ACTION", "SYMBOL", "QTY", "PRICE"])
                 csv_writer.writeheader()
@@ -781,7 +768,7 @@ with st.expander("Trade History", expanded=False):
                     data=csv_buffer.getvalue(),
                     file_name="trade_history.csv",
                     mime="text/csv",
-                    use_container_width=True,
+                    width="stretch",
                 )
 
                 with st.expander("Edit Trade", expanded=False):
@@ -822,11 +809,11 @@ with st.expander("Trade History", expanded=False):
                         )
                         save_trade_col, delete_trade_col, delete_all_col = st.columns(3)
                         with save_trade_col:
-                            save_trade_edit = st.form_submit_button("Save Changes", use_container_width=True)
+                            save_trade_edit = st.form_submit_button("Save Changes", width="stretch")
                         with delete_trade_col:
-                            delete_trade_edit = st.form_submit_button("Delete Trade", use_container_width=True)
+                            delete_trade_edit = st.form_submit_button("Delete Trade", width="stretch")
                         with delete_all_col:
-                            delete_all_trades = st.form_submit_button("Delete All", use_container_width=True)
+                            delete_all_trades = st.form_submit_button("Delete All", width="stretch")
 
                     if save_trade_edit:
                         try:
