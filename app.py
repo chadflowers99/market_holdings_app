@@ -558,9 +558,9 @@ st.markdown(
 )
 st.markdown(
     """
-    <div>
+    <div style="text-align: center;">
         <h1>Portfolio brand.</h1>
-        <div>
+        <div style="font-size: 18px;">
             OPEN LOT HOLDINGS
         </div>
     </div>
