@@ -619,18 +619,19 @@ user = auth_ui()
 if not user:
     st.stop()
 
-st.caption("Cloud-synced lot-level trading with RLS security.")
+user_id = user.id
 
-st.markdown(f"**Logged in as:** {user.email}")
-if st.button("Log Out"):
-    try:
+# Add logout button in sidebar
+with st.sidebar:
+    if st.button("Logout"):
         supabase.auth.sign_out()
-    except Exception as e:
-        st.warning(f"Sign out warning: {str(e)}")
-    st.session_state.user = None
-    st.session_state.access_token = None
-    st.query_params.clear()
-    st.rerun()
+        st.session_state.user = None
+        st.session_state.access_token = None
+        st.query_params.clear()
+        st.rerun()
+    st.caption(f"Logged in as: {user.email}")
+
+st.caption("Cloud-synced lot-level trading with RLS security.")
 
 # Trade Form
 with st.form("trade_form", clear_on_submit=True):
