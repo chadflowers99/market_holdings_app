@@ -240,13 +240,16 @@ def auth_ui():
 
                 if st.button("Sign Up", key="signup_button", use_container_width=True):
                     try:
-                        supabase.auth.sign_up(
+                        response = supabase.auth.sign_up(
                             {
                                 "email": email,
                                 "password": password,
                             }
                         )
-                        st.success("Sign up successful! Please check your email to confirm.")
+                        st.session_state.user = response.user
+                        if response.session:
+                            st.session_state.access_token = response.session.access_token
+                        st.success("Account created! Log in with your credentials.")
                     except Exception as e:
                         st.error(f"Sign up failed: {str(e)}")
 
