@@ -195,7 +195,7 @@ def auth_ui():
             st.query_params.clear()
 
     st.markdown("### Authentication")
-    auth_tab1, auth_tab2, auth_tab3 = st.tabs(["Login", "Sign Up", "Google"])
+    auth_tab1, auth_tab2 = st.tabs(["Login", "Sign Up"])
 
     with auth_tab1:
         email = st.text_input("Email", key="login_email")
@@ -230,38 +230,6 @@ def auth_ui():
                 st.success("Sign up successful! Please check your email to confirm.")
             except Exception as e:
                 st.error(f"Sign up failed: {str(e)}")
-
-    with auth_tab3:
-        # Skip if in callback flow to prevent regenerating verifier
-        if not st.query_params.get("code") and not st.query_params.get("error"):
-            # Cache OAuth URL in session_state to avoid regenerating verifier on every rerun
-            if "google_oauth_url" not in st.session_state:
-                current_url = getattr(st.context, "url", None)
-                oauth_payload = {"provider": "google"}
-                redirect_to = None
-                if current_url:
-                    redirect_to = current_url.split("?", 1)[0].rstrip("/") + "/"
-                    oauth_payload["options"] = {"redirect_to": redirect_to}
-
-                oauth_response = supabase.auth.sign_in_with_oauth(oauth_payload)
-                st.session_state.google_oauth_url = oauth_response.url
-                st.session_state.google_redirect_to = redirect_to
-            else:
-                redirect_to = st.session_state.get("google_redirect_to")
-
-            authorize_url = st.session_state.google_oauth_url
-            st.write("Use your Google account to sign in.")
-            if redirect_to:
-                st.caption(f"Google will redirect back to: {redirect_to}")
-            else:
-                st.caption("Google will redirect using Supabase Auth Site/Redirect URL settings.")
-            st.link_button("Continue with Google", authorize_url, use_container_width=True)
-            st.caption(
-                "If this does not work, enable Google in Supabase Auth Providers and add your app URL"
-                " to Supabase Redirect URLs."
-            )
-        else:
-            st.info("Processing Google login callback...")
 
     return None
 
