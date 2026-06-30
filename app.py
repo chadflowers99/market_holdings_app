@@ -6,6 +6,10 @@ import tempfile
 from pathlib import Path
 
 import streamlit as st
+
+# MUST BE FIRST STREAMLIT COMMAND
+st.set_page_config(page_title="portfolio brand", layout="centered")
+
 from supabase import create_client, Client
 from supabase.client import ClientOptions
 
@@ -522,7 +526,6 @@ def _parse_positive_float(value, field_name):
 
 
 # Main App
-st.set_page_config(page_title="portfolio brand", layout="centered")
 st.markdown(
     """
     <style>
