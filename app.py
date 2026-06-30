@@ -211,7 +211,7 @@ def auth_ui():
     )
 
     with st.container():
-        col1, col2, col3 = st.columns([1, 2, 1])
+        col1, col2, col3 = st.columns([1, 2, 1], gap="large")
         with col2:
             st.markdown("### Authentication")
             auth_tab1, auth_tab2, auth_tab3 = st.tabs(["Login", "Sign Up", "Google"])
