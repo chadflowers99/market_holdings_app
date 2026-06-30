@@ -640,7 +640,17 @@ with st.sidebar:
         st.rerun()
     st.caption(f"Logged in as: {user.email}")
 
-st.caption("Cloud-synced lot-level trading with RLS security.")
+st.markdown(
+    """
+    <div>
+        <h1 style='margin: 0; line-height: 1.05;'>Portfolio brand.</h1>
+        <div style='font-size: 0.72rem;'>
+            OPEN LOT HOLDINGS
+        </div>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 # Trade Form
 with st.form("trade_form", clear_on_submit=True):
