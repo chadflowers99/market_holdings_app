@@ -8,7 +8,7 @@ from pathlib import Path
 import streamlit as st
 
 # MUST BE FIRST STREAMLIT COMMAND
-st.set_page_config(page_title="Holdings", layout="wide")
+st.set_page_config(page_title="Portfolio brand", layout="wide")
 
 from supabase import create_client, Client
 from supabase.client import ClientOptions
@@ -221,9 +221,9 @@ def auth_ui():
     st.markdown(
         """
         <div style="text-align: center;">
-            <h1>Holdings</h1>
+            <h1>Portfolio brand.</h1>
             <div style="font-size: 18px; margin-bottom: 30px;">
-                LOT-LEVEL TRACKING
+                STOCK TRADE
             </div>
         </div>
         """,
@@ -643,9 +643,9 @@ with st.sidebar:
 st.markdown(
     """
     <div>
-        <h1 style='margin: 0; line-height: 1.05;'>Holdings</h1>
+        <h1 style='margin: 0; line-height: 1.05;'>Portfolio brand.</h1>
         <div style='font-size: 0.72rem;'>
-            PORTFOLIO TRACKER
+            STOCK TRADE
         </div>
     </div>
     """,
