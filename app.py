@@ -16,18 +16,29 @@ st.set_page_config(page_title="Portfolio brand", layout="wide")
 from supabase import create_client, Client
 from supabase.client import ClientOptions
 
+
+def _secret_get(key, default=None):
+    """Safe st.secrets accessor that tolerates missing cloud secrets config."""
+    try:
+        return st.secrets.get(key, default)
+    except Exception:
+        return default
+
+
 # Load Supabase credentials from secrets.
 # Supports both flat keys and optional nested [supabase] block.
-supabase_block = st.secrets.get("supabase", {})
+supabase_block = _secret_get("supabase", {})
+if not isinstance(supabase_block, dict):
+    supabase_block = {}
 
 SUPABASE_URL = (
-    st.secrets.get("SUPABASE_URL")
+    _secret_get("SUPABASE_URL")
     or supabase_block.get("SUPABASE_URL")
     or supabase_block.get("url")
 )
 SUPABASE_ANON_KEY = (
-    st.secrets.get("SUPABASE_ANON_KEY")
-    or st.secrets.get("SUPABASE_KEY")
+    _secret_get("SUPABASE_ANON_KEY")
+    or _secret_get("SUPABASE_KEY")
     or supabase_block.get("SUPABASE_ANON_KEY")
     or supabase_block.get("SUPABASE_KEY")
     or supabase_block.get("anon_key")
@@ -123,8 +134,8 @@ def _clear_trace_file():
 def _resolve_oauth_redirect_url() -> str:
     """Build OAuth callback URL for current host, with secrets override support."""
     configured = (
-        st.secrets.get("OAUTH_REDIRECT_URL")
-        or st.secrets.get("APP_REDIRECT_URL")
+        _secret_get("OAUTH_REDIRECT_URL")
+        or _secret_get("APP_REDIRECT_URL")
         or (supabase_block.get("OAUTH_REDIRECT_URL") if isinstance(supabase_block, dict) else None)
     )
     if isinstance(configured, str) and configured.strip():
@@ -375,6 +386,10 @@ def auth_ui():
                     except Exception as e:
                         st.error(f"Google sign in error: {str(e)}")
                 st.caption(f"Google callback: {redirect_to}")
+                st.caption(
+                    "If Google login bounces to another site or fails, add this callback URL to "
+                    "Supabase Auth > URL Configuration > Redirect URLs."
+                )
                 
                 oauth_url = st.session_state.get("oauth_url")
                 if oauth_url:
