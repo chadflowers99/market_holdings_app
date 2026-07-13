@@ -309,7 +309,7 @@ def auth_ui():
         <div style="text-align: center;">
             <h1>Portfolio brand.</h1>
             <div style="font-size: 18px; margin-bottom: 30px;">
-                STOCK TRADE
+                    HOLDINGS
             </div>
         </div>
         """,
@@ -771,7 +771,7 @@ st.markdown(
     <div>
         <h1 style='margin: 0; line-height: 1.05;'>Portfolio brand.</h1>
         <div style='font-size: 0.72rem;'>
-            STOCK TRADE
+            HOLDINGS
         </div>
     </div>
     """,
