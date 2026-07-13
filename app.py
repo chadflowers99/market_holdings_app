@@ -2,7 +2,10 @@ from datetime import datetime
 import csv
 import json
 import io
+import logging
 import tempfile
+import time
+import uuid
 from pathlib import Path
 
 import streamlit as st
@@ -67,6 +70,54 @@ if "your_anon_key_here" in SUPABASE_ANON_KEY.lower():
 BASE_DIR = Path(__file__).resolve().parent
 AUTH_STORAGE_FILE = BASE_DIR / ".streamlit" / "supabase_auth_storage.json"
 AUTH_STORAGE_FILE_FALLBACK = Path(tempfile.gettempdir()) / "stock_trade_supabase_auth_storage.json"
+TRADE_TRACE_FILE = Path(tempfile.gettempdir()) / "stock_trade_trade_trace.log"
+
+logger = logging.getLogger("holdings_app")
+
+
+def _trace_marker(trace_id: str, step: str, phase: str, details: str = ""):
+    """Persist crash-isolation breadcrumbs to temp file and app logs."""
+    timestamp = datetime.now().isoformat(timespec="milliseconds")
+    line = f"{timestamp} | trace={trace_id} | {step} | {phase}"
+    if details:
+        line = f"{line} | {details}"
+
+    try:
+        TRADE_TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(TRADE_TRACE_FILE, "a", encoding="utf-8") as trace_f:
+            trace_f.write(line + "\n")
+            trace_f.flush()
+    except OSError:
+        pass
+
+    logger.warning(line)
+
+
+def _new_trace_id(symbol: str) -> str:
+    return f"{symbol[:8]}-{uuid.uuid4().hex[:8]}"
+
+
+def _read_recent_trace_lines(max_lines: int = 120):
+    """Read recent durable trace lines for post-crash diagnostics."""
+    try:
+        with open(TRADE_TRACE_FILE, "r", encoding="utf-8") as trace_f:
+            lines = trace_f.readlines()
+        return [line.rstrip("\n") for line in lines[-max_lines:]]
+    except FileNotFoundError:
+        return []
+    except OSError as e:
+        return [f"Unable to read trace file: {str(e)}"]
+
+
+def _clear_trace_file():
+    """Reset trace file to isolate the next reproduction run."""
+    try:
+        TRADE_TRACE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(TRADE_TRACE_FILE, "w", encoding="utf-8") as trace_f:
+            trace_f.write("")
+        return True
+    except OSError:
+        return False
 
 
 class MemoryAuthStorage:
@@ -303,21 +354,25 @@ def auth_ui():
     return None
 
 
-def load_portfolio():
+def load_portfolio(trace_id: str = "system"):
     """Reads active lots from Supabase portfolio table for current user."""
     if not st.session_state.get("user"):
         return []
 
     try:
         user_id = st.session_state.user.id
+        _trace_marker(trace_id, "portfolio.select", "before", f"user_id={user_id}")
         response = supabase.table("portfolio").select("*").eq("user_id", user_id).gt("quantity", 0).execute()
+        count = len(response.data) if response and response.data else 0
+        _trace_marker(trace_id, "portfolio.select", "after", f"rows={count}")
         return response.data if response.data else []
     except Exception as e:
+        _trace_marker(trace_id, "portfolio.select", "error", str(e))
         st.error(f"Failed to load portfolio: {str(e)}")
         return []
 
 
-def save_portfolio_row(lot):
+def save_portfolio_row(lot, trace_id: str = "system"):
     """Inserts a new lot or updates existing lot in Supabase portfolio table."""
     if not st.session_state.get("user"):
         return False
@@ -329,33 +384,51 @@ def save_portfolio_row(lot):
         # If lot has an id, update it; otherwise insert new
         if "id" in lot_with_user and lot_with_user["id"]:
             # Update existing lot
+            _trace_marker(
+                trace_id,
+                "portfolio.update",
+                "before",
+                f"id={lot_with_user['id']} symbol={lot_with_user.get('symbol')} qty={lot_with_user.get('quantity')}",
+            )
             supabase.table("portfolio").update(lot_with_user).eq("id", lot_with_user["id"]).execute()
+            _trace_marker(trace_id, "portfolio.update", "after", f"id={lot_with_user['id']}")
         else:
             # Insert new lot (id will be auto-generated)
+            _trace_marker(
+                trace_id,
+                "portfolio.insert",
+                "before",
+                f"symbol={lot_with_user.get('symbol')} qty={lot_with_user.get('quantity')}",
+            )
             supabase.table("portfolio").insert(lot_with_user).execute()
+            _trace_marker(trace_id, "portfolio.insert", "after", f"symbol={lot_with_user.get('symbol')}")
         return True
     except Exception as e:
+        _trace_marker(trace_id, "portfolio.write", "error", str(e))
         st.error(f"Failed to save lot: {str(e)}")
         return False
 
 
-def delete_lot_from_db(symbol, last_updated):
+def delete_lot_from_db(symbol, last_updated, trace_id: str = "system"):
     """Sets lot quantity to 0 in Supabase portfolio table."""
     if not st.session_state.get("user"):
         return False
 
     try:
         user_id = st.session_state.user.id
+        _trace_marker(trace_id, "portfolio.close_lot", "before", f"symbol={symbol} last_updated={last_updated}")
         supabase.table("portfolio").update({"quantity": 0}).eq("user_id", user_id).eq("symbol", symbol).eq(
             "last_updated", last_updated
         ).execute()
+        _trace_marker(trace_id, "portfolio.close_lot", "after", f"symbol={symbol}")
         return True
     except Exception as e:
+        _trace_marker(trace_id, "portfolio.close_lot", "error", str(e))
         st.error(f"Failed to close lot: {str(e)}")
         return False
 
 
-def log_to_db(symbol, action, qty, price, avg_buy, pl_value):
+def log_to_db(symbol, action, qty, price, avg_buy, pl_value, trace_id: str = "system"):
     """Appends a permanent trade record to Supabase permanent_ledger."""
     if not st.session_state.get("user"):
         return False
@@ -375,9 +448,17 @@ def log_to_db(symbol, action, qty, price, avg_buy, pl_value):
             "realized_pl": pl_value,
         }
 
+        _trace_marker(
+            trace_id,
+            "ledger.insert",
+            "before",
+            f"action={action} symbol={symbol} qty={qty} price={price}",
+        )
         supabase.table("permanent_ledger").insert(record).execute()
+        _trace_marker(trace_id, "ledger.insert", "after", f"action={action} symbol={symbol}")
         return True
     except Exception as e:
+        _trace_marker(trace_id, "ledger.insert", "error", str(e))
         st.error(f"Failed to log trade: {str(e)}")
         return False
 
@@ -385,8 +466,10 @@ def log_to_db(symbol, action, qty, price, avg_buy, pl_value):
 def handle_trade(action, symbol, quantity, price):
     """Processes BUY or SELL trades with lowest-buy-first FIFO matching."""
     symbol = symbol.strip().upper()
+    trace_id = _new_trace_id(symbol)
     now = datetime.now().isoformat()
-    portfolio = load_portfolio()
+    _trace_marker(trace_id, "trade.handle", "start", f"action={action} symbol={symbol} qty={quantity} price={price}")
+    portfolio = load_portfolio(trace_id=trace_id)
 
     if action == "buy":
         new_lot = {
@@ -395,8 +478,9 @@ def handle_trade(action, symbol, quantity, price):
             "avg_price": price,
             "last_updated": now,
         }
-        save_portfolio_row(new_lot)
-        log_to_db(symbol, "BUY", quantity, price, price, 0.0)
+        save_portfolio_row(new_lot, trace_id=trace_id)
+        log_to_db(symbol, "BUY", quantity, price, price, 0.0, trace_id=trace_id)
+        _trace_marker(trace_id, "trade.handle", "done", "buy_complete")
         return True, f"Bought {quantity} shares of {symbol} @ ${price:.2f}."
 
     symbol_lots = [lot for lot in portfolio if lot["symbol"] == symbol and lot["quantity"] > 0]
@@ -419,7 +503,7 @@ def handle_trade(action, symbol, quantity, price):
         lot_realized_pl = (price - lot["avg_price"]) * consumed
         total_realized_pl += lot_realized_pl
 
-        log_to_db(symbol, "SELL", consumed, price, lot["avg_price"], lot_realized_pl)
+        log_to_db(symbol, "SELL", consumed, price, lot["avg_price"], lot_realized_pl, trace_id=trace_id)
 
         # Save original timestamp before updating
         original_last_updated = lot["last_updated"]
@@ -427,13 +511,14 @@ def handle_trade(action, symbol, quantity, price):
         lot["last_updated"] = now
 
         if lot["quantity"] <= 0:
-            delete_lot_from_db(symbol, original_last_updated)
+            delete_lot_from_db(symbol, original_last_updated, trace_id=trace_id)
         else:
-            save_portfolio_row(lot)
+            save_portfolio_row(lot, trace_id=trace_id)
 
         remaining_to_sell -= consumed
 
     pl_status = "Profit" if total_realized_pl >= 0 else "Loss"
+    _trace_marker(trace_id, "trade.handle", "done", f"sell_complete realized={total_realized_pl:.2f}")
     return True, f"Sold {quantity} shares of {symbol}. Realized {pl_status}: ${abs(total_realized_pl):.2f}."
 
 
@@ -651,6 +736,39 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+with st.expander("Crash Debug Trace", expanded=False):
+    st.caption("Shows durable before/after markers for Supabase calls in the trade path.")
+    st.caption(f"Trace file: {TRADE_TRACE_FILE}")
+
+    trace_lines = _read_recent_trace_lines(max_lines=200)
+    if trace_lines:
+        trace_text = "\n".join(trace_lines)
+        st.code(trace_text, language="text")
+    else:
+        trace_text = ""
+        st.caption("No trace markers found yet.")
+
+    debug_col1, debug_col2 = st.columns(2)
+    with debug_col1:
+        if st.button("Refresh Trace", key="refresh_trace_button", use_container_width=True):
+            st.rerun()
+    with debug_col2:
+        if st.button("Clear Trace", key="clear_trace_button", use_container_width=True):
+            if _clear_trace_file():
+                st.success("Trace file cleared.")
+                st.rerun()
+            else:
+                st.error("Unable to clear trace file.")
+
+    st.download_button(
+        "Download Trace Log",
+        data=trace_text,
+        file_name="stock_trade_trade_trace.log",
+        mime="text/plain",
+        use_container_width=True,
+        disabled=not bool(trace_text),
+    )
 
 # Trade Form
 with st.form("trade_form", clear_on_submit=True):
