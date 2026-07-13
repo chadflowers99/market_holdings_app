@@ -385,11 +385,6 @@ def auth_ui():
                         st.session_state.oauth_redirect_to = redirect_to
                     except Exception as e:
                         st.error(f"Google sign in error: {str(e)}")
-                st.caption(f"Google callback: {redirect_to}")
-                st.caption(
-                    "If Google login bounces to another site or fails, add this callback URL to "
-                    "Supabase Auth > URL Configuration > Redirect URLs."
-                )
                 
                 oauth_url = st.session_state.get("oauth_url")
                 if oauth_url:
