@@ -1,3 +1,7 @@
 [server]
 # Work around intermittent Streamlit Cloud crashes in some Linux/Python combos.
 fileWatcherType = "none"
+
+[global]
+# Avoid Arrow-based dataframe serialization path, which can segfault on some cloud runtimes.
+dataFrameSerialization = "legacy"

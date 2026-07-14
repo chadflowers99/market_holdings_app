@@ -1,5 +1,6 @@
 streamlit==1.39.0
 numpy==1.26.4
 pandas==2.2.3
+pyarrow==14.0.2
 supabase==2.31.0
 python-dotenv==1.2.2
