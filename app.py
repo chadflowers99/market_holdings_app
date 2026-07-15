@@ -778,39 +778,6 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-with st.expander("Crash Debug Trace", expanded=False):
-    st.caption("Shows durable before/after markers for Supabase calls in the trade path.")
-    st.caption(f"Trace file: {TRADE_TRACE_FILE}")
-
-    trace_lines = _read_recent_trace_lines(max_lines=200)
-    if trace_lines:
-        trace_text = "\n".join(trace_lines)
-        st.code(trace_text, language="text")
-    else:
-        trace_text = ""
-        st.caption("No trace markers found yet.")
-
-    debug_col1, debug_col2 = st.columns(2)
-    with debug_col1:
-        if st.button("Refresh Trace", key="refresh_trace_button", use_container_width=True):
-            st.rerun()
-    with debug_col2:
-        if st.button("Clear Trace", key="clear_trace_button", use_container_width=True):
-            if _clear_trace_file():
-                st.success("Trace file cleared.")
-                st.rerun()
-            else:
-                st.error("Unable to clear trace file.")
-
-    st.download_button(
-        "Download Trace Log",
-        data=trace_text,
-        file_name="stock_trade_trade_trace.log",
-        mime="text/plain",
-        use_container_width=True,
-        disabled=not bool(trace_text),
-    )
-
 # Trade Form
 with st.form("trade_form", clear_on_submit=True):
     col1, col2, col3 = st.columns(3)
