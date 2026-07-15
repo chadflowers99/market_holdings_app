@@ -1,15 +1,13 @@
-# Holdings
+# Market Holdings
 
-A multi-user Streamlit app for lot-level stock portfolio tracking with real-time Supabase sync.
+A multi-user Streamlit app for lot-level stock portfolio tracking with Supabase sync.
 
 ## Features
 
-- **Lot-Level Tracking**: Track every buy separately for precise cost-basis calculation
-- **Real-time Sync**: Automatic cloud synchronization with Supabase
-- **Multi-User**: Team collaboration with row-level security (RLS)
-- **Authentication**: Email/password and Google OAuth login
-- **Trade History**: Permanent ledger of all buy/sell transactions
-- **Portfolio Analytics**: Realized/unrealized P&L tracking
+- Lot-level holdings and sell tracking
+- Permanent trade ledger
+- Email/password and Google OAuth login
+- RLS-backed per-user data isolation
 
 ## Quick Start
 
@@ -19,11 +17,14 @@ A multi-user Streamlit app for lot-level stock portfolio tracking with real-time
    pip install -r requirements.txt
    ```
 
-2. Set up environment:
-   - Create `.streamlit/secrets.toml` with Supabase credentials
-   - Get your credentials from [Supabase Dashboard](https://supabase.com)
+2. Create local secrets file at `.streamlit/secrets.toml` with:
 
-3. Run:
+   ```toml
+   SUPABASE_URL = "https://<your-project>.supabase.co"
+   SUPABASE_ANON_KEY = "<your-anon-key>"
+   ```
+
+3. Run locally:
 
    ```powershell
    streamlit run app.py
@@ -33,30 +34,21 @@ A multi-user Streamlit app for lot-level stock portfolio tracking with real-time
 
 All data syncs to Supabase PostgreSQL:
 
-- `portfolio`: Active holdings (lot-level)
-- `permanent_ledger`: Complete trade history
+- `portfolio`: Active holdings
+- `permanent_ledger`: Full trade history
 
-## Deployment
+## Streamlit Deployment Runbook
 
-Deployed to Streamlit Cloud: [pb-stocktrade.streamlit.app](https://pb-stocktrade.streamlit.app)
-pip install -r requirements.txt
-```
-
-## Run
-
-Run Streamlit app:
-
-```powershell
-streamlit run app.py
-```
-
-Run Tkinter app:
-
-```powershell
-python enter_trade.py
-```
-
-## Notes
-
-- Avoid running Streamlit and Tkinter at the exact same time to prevent simultaneous writes.
-- If legacy aggregated CSV format is detected, the app auto-migrates to lot-level format.
+1. App source settings:
+   - Repo: `chadflowers99/market_holdings_app`
+   - Branch: `main`
+   - Main file: `app.py`
+2. App URL:
+   - `https://pb-marketholdings.streamlit.app`
+3. Streamlit Cloud secrets:
+   - `SUPABASE_URL`
+   - `SUPABASE_ANON_KEY`
+4. Supabase Auth redirect configuration:
+   - `https://pb-marketholdings.streamlit.app`
+   - `https://pb-flexbudget.streamlit.app`
+   - Optional local dev: `http://localhost:8501`
