@@ -947,7 +947,8 @@ with st.expander("Trade History", expanded=False):
                     use_container_width=True,
                 )
 
-                with st.expander("Edit Trade", expanded=False):
+                with st.container():
+                    st.markdown("#### Edit Trade")
                     trade_choice_map = {}
                     trade_choices = []
                     for idx, item in enumerate(filtered_records):
