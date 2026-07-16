@@ -281,6 +281,8 @@ def reset_market_session_state() -> None:
         "trade_history_start_date_filter_v3",
         "trade_history_end_date_filter_v3",
         "trade_history_edit_choice",
+        "guest_portfolio",
+        "guest_ledger",
     ]
     for key in keys_to_clear:
         st.session_state.pop(key, None)
@@ -446,6 +448,10 @@ def auth_ui():
 
 def load_portfolio(trace_id: str = "system"):
     """Reads active lots from Supabase portfolio table for current user."""
+    if st.session_state.get("guest_mode"):
+        portfolio = st.session_state.get("guest_portfolio", [])
+        return [lot for lot in portfolio if float(lot.get("quantity", 0)) > 0]
+
     if not st.session_state.get("user"):
         return []
 
@@ -464,6 +470,26 @@ def load_portfolio(trace_id: str = "system"):
 
 def save_portfolio_row(lot, trace_id: str = "system"):
     """Inserts a new lot or updates existing lot in Supabase portfolio table."""
+    if st.session_state.get("guest_mode"):
+        if "guest_portfolio" not in st.session_state:
+            st.session_state.guest_portfolio = []
+        portfolio = st.session_state.guest_portfolio
+        if "id" in lot and lot["id"]:
+            updated = False
+            for idx, existing in enumerate(portfolio):
+                if existing.get("id") == lot["id"]:
+                    portfolio[idx] = {**existing, **lot}
+                    updated = True
+                    break
+            if not updated:
+                portfolio.append({**lot})
+        else:
+            lot_copy = {**lot}
+            lot_copy.setdefault("id", uuid.uuid4().hex)
+            portfolio.append(lot_copy)
+        st.session_state.guest_portfolio = portfolio
+        return True
+
     if not st.session_state.get("user"):
         return False
 
@@ -501,6 +527,14 @@ def save_portfolio_row(lot, trace_id: str = "system"):
 
 def delete_lot_from_db(symbol, last_updated, trace_id: str = "system"):
     """Sets lot quantity to 0 in Supabase portfolio table."""
+    if st.session_state.get("guest_mode"):
+        portfolio = st.session_state.get("guest_portfolio", [])
+        st.session_state.guest_portfolio = [
+            lot for lot in portfolio
+            if not (lot.get("symbol") == symbol and lot.get("last_updated") == last_updated)
+        ]
+        return True
+
     if not st.session_state.get("user"):
         return False
 
@@ -520,6 +554,24 @@ def delete_lot_from_db(symbol, last_updated, trace_id: str = "system"):
 
 def log_to_db(symbol, action, qty, price, avg_buy, pl_value, trace_id: str = "system"):
     """Appends a permanent trade record to Supabase permanent_ledger."""
+    if st.session_state.get("guest_mode"):
+        if "guest_ledger" not in st.session_state:
+            st.session_state.guest_ledger = []
+        now = datetime.now().isoformat()
+        st.session_state.guest_ledger.append(
+            {
+                "id": uuid.uuid4().hex,
+                "timestamp": now,
+                "symbol": symbol,
+                "action": action,
+                "quantity": qty,
+                "price": price,
+                "avg_buy_price": avg_buy,
+                "realized_pl": pl_value,
+            }
+        )
+        return True
+
     if not st.session_state.get("user"):
         return False
 
@@ -614,6 +666,16 @@ def handle_trade(action, symbol, quantity, price):
 
 def load_running_realized_pl():
     """Returns running realized P/L by symbol and overall total from Supabase."""
+    if st.session_state.get("guest_mode"):
+        pl_by_symbol = {}
+        for row in st.session_state.get("guest_ledger", []):
+            symbol = row.get("symbol", "")
+            pl = float(row.get("realized_pl", 0.0) or 0.0)
+            if symbol:
+                pl_by_symbol[symbol] = pl_by_symbol.get(symbol, 0.0) + pl
+        total_pl = sum(pl_by_symbol.values())
+        return pl_by_symbol, total_pl
+
     if not st.session_state.get("user"):
         return {}, 0.0
 
@@ -825,44 +887,9 @@ if is_guest:
         """,
         unsafe_allow_html=True,
     )
+    st.success("Guest mode is active. Changes are temporary and reset when the session ends.")
 
-    st.success("Guest mode is active.")
-    st.info("You are viewing a read-only preview. Sign in to access your holdings, trades, and history.")
-
-    st.markdown("### Trade Form (Preview)")
-    with st.form("trade_form_guest_preview", clear_on_submit=False):
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.text_input("Stock Symbol", value="AAPL", disabled=True)
-        with col2:
-            st.text_input("Quantity", value="10", disabled=True)
-        with col3:
-            st.text_input("Price per Share", value="215.50", disabled=True)
-
-        btn_col1, btn_col2 = st.columns(2)
-        with btn_col1:
-            st.form_submit_button("Log Buy", use_container_width=True, disabled=True)
-        with btn_col2:
-            st.form_submit_button("Log Sell", use_container_width=True, disabled=True)
-
-    preview_col1, preview_col2 = st.columns(2)
-    with preview_col1:
-        st.metric("Running Realized P/L", "$0.00")
-    with preview_col2:
-        st.metric("Active Lots", "0")
-
-    st.markdown("### Preview: Current Holdings")
-    holdings_preview = pd.DataFrame(columns=["SYMBOL", "QTY", "PRICE"])
-    st.dataframe(holdings_preview, use_container_width=True, hide_index=True)
-
-    st.markdown("### Preview: Trade History")
-    with st.expander("Trade History", expanded=False):
-        history_preview = pd.DataFrame(columns=["TRADE DATE", "ACTION", "SYMBOL", "QTY", "PRICE"])
-        st.dataframe(history_preview, use_container_width=True, hide_index=True)
-        st.caption("No trade history available in guest mode.")
-    st.stop()
-
-user_id = user.id
+user_id = user.id if user else ""
 
 # Add logout button in sidebar
 with st.sidebar:
@@ -961,12 +988,21 @@ else:
 st.markdown("### Trade History")
 with st.expander("Trade History", expanded=False):
     try:
-        user_id = st.session_state.user.id
-        ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).order("timestamp", desc=True).execute()
-        if ledger_response.data:
+        if is_guest:
+            ledger_data = sorted(
+                st.session_state.get("guest_ledger", []),
+                key=lambda r: str(r.get("timestamp", "")),
+                reverse=True,
+            )
+        else:
+            user_id = st.session_state.user.id
+            ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).order("timestamp", desc=True).execute()
+            ledger_data = ledger_response.data or []
+
+        if ledger_data:
             history_rows = []
             available_dates = []
-            for record in ledger_response.data:
+            for record in ledger_data:
                 timestamp_value = record.get("timestamp", "")
                 parsed_date = None
                 timestamp_text = str(timestamp_value)
@@ -1067,90 +1103,93 @@ with st.expander("Trade History", expanded=False):
                     use_container_width=True,
                 )
 
-                with st.container():
-                    st.markdown("#### Edit Trade")
-                    trade_choice_map = {}
-                    trade_choices = []
-                    for idx, item in enumerate(filtered_records):
-                        record = item["_record"]
-                        record_id = record.get("id")
-                        if record_id:
-                            choice_key = f"id:{record_id}"
-                        else:
-                            choice_key = (
-                                f"fallback:{idx}:{record.get('timestamp', '')}:{record.get('action', '')}:"
-                                f"{record.get('symbol', '')}:{record.get('quantity', '')}:{record.get('price', '')}"
-                            )
-                        trade_choices.append(choice_key)
-                        trade_choice_map[choice_key] = record
+                if is_guest:
+                    st.caption("Guest mode: trade editing and deletion are disabled.")
+                else:
+                    with st.container():
+                        st.markdown("#### Edit Trade")
+                        trade_choice_map = {}
+                        trade_choices = []
+                        for idx, item in enumerate(filtered_records):
+                            record = item["_record"]
+                            record_id = record.get("id")
+                            if record_id:
+                                choice_key = f"id:{record_id}"
+                            else:
+                                choice_key = (
+                                    f"fallback:{idx}:{record.get('timestamp', '')}:{record.get('action', '')}:"
+                                    f"{record.get('symbol', '')}:{record.get('quantity', '')}:{record.get('price', '')}"
+                                )
+                            trade_choices.append(choice_key)
+                            trade_choice_map[choice_key] = record
 
-                    selected_trade_key = st.selectbox(
-                        "Choose trade",
-                        trade_choices,
-                        format_func=lambda choice: _ledger_display_label(trade_choice_map[choice]),
-                        key="trade_history_edit_choice",
-                    )
-                    selected_trade = trade_choice_map[selected_trade_key]
-
-                    with st.form("edit_trade_form"):
-                        current_action = str(selected_trade.get("action", "")).upper()
-                        action_index = 0 if current_action == "BUY" else 1
-                        edit_action = st.selectbox("Action", ["BUY", "SELL"], index=action_index)
-                        edit_symbol = st.text_input("Symbol", value=str(selected_trade.get("symbol", ""))).strip().upper()
-                        edit_qty = st.text_input("Quantity", value=str(int(selected_trade.get("quantity", 1) or 1)))
-                        edit_price = st.text_input("Price", value=f"{float(selected_trade.get('price', 0.0) or 0.0):.2f}")
-                        confirm_delete_all = st.checkbox(
-                            "Confirm delete all trades",
-                            value=False,
-                            help="This permanently removes your entire trade history and resets holdings.",
+                        selected_trade_key = st.selectbox(
+                            "Choose trade",
+                            trade_choices,
+                            format_func=lambda choice: _ledger_display_label(trade_choice_map[choice]),
+                            key="trade_history_edit_choice",
                         )
-                        save_trade_col, delete_trade_col, delete_all_col = st.columns(3)
-                        with save_trade_col:
-                            save_trade_edit = st.form_submit_button("Save Changes", use_container_width=True)
-                        with delete_trade_col:
-                            delete_trade_edit = st.form_submit_button("Delete Trade", use_container_width=True)
-                        with delete_all_col:
-                            delete_all_trades = st.form_submit_button("Delete All", use_container_width=True)
+                        selected_trade = trade_choice_map[selected_trade_key]
 
-                    if save_trade_edit:
-                        try:
-                            parsed_edit_qty, edit_qty_error = _parse_positive_int(edit_qty, "Quantity")
-                            parsed_edit_price, edit_price_error = _parse_positive_float(edit_price, "Price")
-                            if edit_qty_error:
-                                raise ValueError(edit_qty_error)
-                            if edit_price_error:
-                                raise ValueError(edit_price_error)
-                            updated_record = {
-                                "action": edit_action,
-                                "symbol": edit_symbol,
-                                "quantity": parsed_edit_qty,
-                                "price": parsed_edit_price,
-                            }
-                            _update_ledger_record(selected_trade, updated_record)
-                            rebuild_portfolio_from_ledger(user_id)
-                            st.success("Trade updated and portfolio recalculated.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to update trade: {str(e)}")
-                    elif delete_trade_edit:
-                        try:
-                            _delete_ledger_record(selected_trade)
-                            rebuild_portfolio_from_ledger(user_id)
-                            st.success("Trade deleted and portfolio recalculated.")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"Failed to delete trade: {str(e)}")
-                    elif delete_all_trades:
-                        if not confirm_delete_all:
-                            st.warning("Enable 'Confirm delete all trades' before deleting everything.")
-                        else:
+                        with st.form("edit_trade_form"):
+                            current_action = str(selected_trade.get("action", "")).upper()
+                            action_index = 0 if current_action == "BUY" else 1
+                            edit_action = st.selectbox("Action", ["BUY", "SELL"], index=action_index)
+                            edit_symbol = st.text_input("Symbol", value=str(selected_trade.get("symbol", ""))).strip().upper()
+                            edit_qty = st.text_input("Quantity", value=str(int(selected_trade.get("quantity", 1) or 1)))
+                            edit_price = st.text_input("Price", value=f"{float(selected_trade.get('price', 0.0) or 0.0):.2f}")
+                            confirm_delete_all = st.checkbox(
+                                "Confirm delete all trades",
+                                value=False,
+                                help="This permanently removes your entire trade history and resets holdings.",
+                            )
+                            save_trade_col, delete_trade_col, delete_all_col = st.columns(3)
+                            with save_trade_col:
+                                save_trade_edit = st.form_submit_button("Save Changes", use_container_width=True)
+                            with delete_trade_col:
+                                delete_trade_edit = st.form_submit_button("Delete Trade", use_container_width=True)
+                            with delete_all_col:
+                                delete_all_trades = st.form_submit_button("Delete All", use_container_width=True)
+
+                        if save_trade_edit:
                             try:
-                                supabase.table("permanent_ledger").delete().eq("user_id", user_id).execute()
+                                parsed_edit_qty, edit_qty_error = _parse_positive_int(edit_qty, "Quantity")
+                                parsed_edit_price, edit_price_error = _parse_positive_float(edit_price, "Price")
+                                if edit_qty_error:
+                                    raise ValueError(edit_qty_error)
+                                if edit_price_error:
+                                    raise ValueError(edit_price_error)
+                                updated_record = {
+                                    "action": edit_action,
+                                    "symbol": edit_symbol,
+                                    "quantity": parsed_edit_qty,
+                                    "price": parsed_edit_price,
+                                }
+                                _update_ledger_record(selected_trade, updated_record)
                                 rebuild_portfolio_from_ledger(user_id)
-                                st.success("All trades deleted and portfolio reset.")
+                                st.success("Trade updated and portfolio recalculated.")
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Failed to delete all trades: {str(e)}")
+                                st.error(f"Failed to update trade: {str(e)}")
+                        elif delete_trade_edit:
+                            try:
+                                _delete_ledger_record(selected_trade)
+                                rebuild_portfolio_from_ledger(user_id)
+                                st.success("Trade deleted and portfolio recalculated.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Failed to delete trade: {str(e)}")
+                        elif delete_all_trades:
+                            if not confirm_delete_all:
+                                st.warning("Enable 'Confirm delete all trades' before deleting everything.")
+                            else:
+                                try:
+                                    supabase.table("permanent_ledger").delete().eq("user_id", user_id).execute()
+                                    rebuild_portfolio_from_ledger(user_id)
+                                    st.success("All trades deleted and portfolio reset.")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to delete all trades: {str(e)}")
             else:
                 st.caption("No trade history matches the current filters.")
         else:
