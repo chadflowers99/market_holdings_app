@@ -821,7 +821,21 @@ if is_guest:
         """,
         unsafe_allow_html=True,
     )
-    st.info("Guest mode is enabled. Sign in to log trades and view your private holdings data.")
+
+    st.success("Guest mode is active.")
+    st.info("You are viewing a read-only preview. Sign in to access your holdings, trades, and history.")
+
+    preview_col1, preview_col2 = st.columns(2)
+    with preview_col1:
+        st.metric("Running Realized P/L", "$0.00")
+    with preview_col2:
+        st.metric("Active Lots", "0")
+
+    st.markdown("### Preview: Current Holdings")
+    st.dataframe([], use_container_width=True, hide_index=True)
+
+    st.markdown("### Preview: Trade History")
+    st.caption("No trade history available in guest mode.")
     st.stop()
 
 user_id = user.id
