@@ -155,6 +155,22 @@ def _resolve_oauth_redirect_url() -> str:
     return "https://pb-stocktrade.streamlit.app"
 
 
+class SessionStateAuthStorage:
+    """Use only session_state, which persists within a single Streamlit session."""
+    def get_item(self, key):
+        store = st.session_state.get("_supabase_auth_store", {})
+        return store.get(key)
+
+    def set_item(self, key, value):
+        if "_supabase_auth_store" not in st.session_state:
+            st.session_state._supabase_auth_store = {}
+        st.session_state._supabase_auth_store[key] = value
+
+    def remove_item(self, key):
+        store = st.session_state.get("_supabase_auth_store", {})
+        store.pop(key, None)
+
+
 class MemoryAuthStorage:
     """In-memory auth storage fallback when filesystem is not writable."""
     def __init__(self):
@@ -226,12 +242,13 @@ def _is_writable(path: Path) -> bool:
 
 
 def _build_auth_storage():
-    """Use file-backed storage when possible to preserve PKCE verifier on callback."""
+    """Use file-backed storage when possible, otherwise use session_state (persists within session)."""
     if _is_writable(AUTH_STORAGE_FILE):
         return FileAuthStorage(AUTH_STORAGE_FILE)
     if _is_writable(AUTH_STORAGE_FILE_FALLBACK):
         return FileAuthStorage(AUTH_STORAGE_FILE_FALLBACK)
-    return MemoryAuthStorage()
+    # Always use session_state as last resort (survives redirects within same session)
+    return SessionStateAuthStorage()
 
 
 # Initialize Supabase client with appropriate storage backend.
