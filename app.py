@@ -242,52 +242,65 @@ def _is_writable(path: Path) -> bool:
 
 
 def _build_auth_storage():
-    """Use file-backed storage when possible, otherwise use session_state (persists within session)."""
-    if _is_writable(AUTH_STORAGE_FILE):
-        return FileAuthStorage(AUTH_STORAGE_FILE)
-    if _is_writable(AUTH_STORAGE_FILE_FALLBACK):
-        return FileAuthStorage(AUTH_STORAGE_FILE_FALLBACK)
-    # Always use session_state as last resort (survives redirects within same session)
+    """Always use per-session storage to prevent auth state sharing across users."""
     return SessionStateAuthStorage()
 
 
-# Initialize Supabase client with appropriate storage backend.
-@st.cache_resource
+# Initialize Supabase client with session-scoped storage backend.
 def get_supabase_client() -> Client:
-    storage = _build_auth_storage()
-    return create_client(
-        SUPABASE_URL,
-        SUPABASE_ANON_KEY,
-        options=ClientOptions(
-            flow_type="pkce",
-            storage=storage,
-        ),
-    )
+    if "_supabase_client" not in st.session_state:
+        storage = _build_auth_storage()
+        st.session_state._supabase_client = create_client(
+            SUPABASE_URL,
+            SUPABASE_ANON_KEY,
+            options=ClientOptions(
+                flow_type="pkce",
+                storage=storage,
+            ),
+        )
+    return st.session_state._supabase_client
 
 
 supabase: Client = get_supabase_client()
+
+
+def reset_market_session_state() -> None:
+    """Clear session keys that can leak prior authenticated app state across mode switches."""
+    keys_to_clear = [
+        "_supabase_auth_store",
+        "_supabase_client",
+        "oauth_url",
+        "oauth_redirect_to",
+        "trade_history_action_filter",
+        "trade_history_symbol_filter",
+        "trade_history_date_filter_mode",
+        "trade_history_start_date_filter_v3",
+        "trade_history_end_date_filter_v3",
+        "trade_history_edit_choice",
+    ]
+    for key in keys_to_clear:
+        st.session_state.pop(key, None)
 
 
 def auth_ui():
     """Displays login/signup UI and manages authentication state."""
     if "user" not in st.session_state:
         st.session_state.user = None
+    if "guest_mode" not in st.session_state:
+        st.session_state.guest_mode = False
+    if "show_auth_form" not in st.session_state:
+        st.session_state.show_auth_form = False
+
+    if st.session_state.guest_mode:
+        st.session_state.user = None
+        st.session_state.access_token = None
+        return None
 
     if st.session_state.user:
         return st.session_state.user
 
-    # Restore session from file-backed storage after page refresh
-    if not st.session_state.user:
-        try:
-            existing = supabase.auth.get_session()
-            if existing and existing.user:
-                st.session_state.user = existing.user
-                st.session_state.access_token = existing.access_token
-                # Ensure the session is set on the client for RLS policies
-                supabase.auth.set_session(existing.access_token, existing.refresh_token)
-                return st.session_state.user
-        except Exception:
-            pass
+    # Privacy-first behavior: do not auto-restore an existing auth session.
+    # Users must explicitly choose to sign in from the landing page.
 
     oauth_error = st.query_params.get("error")
     oauth_error_description = st.query_params.get("error_description")
@@ -332,6 +345,21 @@ def auth_ui():
         """,
         unsafe_allow_html=True,
     )
+
+    landing_col1, landing_col2 = st.columns(2)
+    with landing_col1:
+        if st.button("Continue as Guest", key="continue_guest_btn", use_container_width=True):
+            reset_market_session_state()
+            st.session_state.guest_mode = True
+            st.session_state.show_auth_form = False
+            st.rerun()
+    with landing_col2:
+        if st.button("Sign In / Create Account", key="show_auth_btn", use_container_width=True):
+            st.session_state.show_auth_form = True
+
+    if not st.session_state.show_auth_form:
+        st.info("Choose an option above to continue.")
+        return None
 
     col_l, col_m, col_r = st.columns([1, 2, 1])
     with col_m:
@@ -767,21 +795,58 @@ st.markdown(
 
 # Authentication
 user = auth_ui()
-if not user:
+is_guest = bool(st.session_state.get("guest_mode"))
+if not user and not is_guest:
+    st.stop()
+
+if is_guest:
+    st.session_state.user = None
+    st.session_state.access_token = None
+    with st.sidebar:
+        st.caption("Guest mode")
+        if st.button("Sign In", key="guest_to_login"):
+            st.session_state.guest_mode = False
+            st.session_state.show_auth_form = True
+            reset_market_session_state()
+            st.rerun()
+
+    st.markdown(
+        """
+        <div>
+            <h1 style='margin: 0; line-height: 1.05;'>Portfolio brand.</h1>
+            <div style='font-size: 0.72rem;'>
+                MARKET HOLDINGS
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.info("Guest mode is enabled. Sign in to log trades and view your private holdings data.")
     st.stop()
 
 user_id = user.id
 
 # Add logout button in sidebar
 with st.sidebar:
-    if st.button("Logout"):
+    if st.button("Use Guest Mode", key="switch_to_guest"):
         supabase.auth.sign_out()
+        reset_market_session_state()
         st.session_state.user = None
         st.session_state.access_token = None
+        st.session_state.guest_mode = True
+        st.session_state.show_auth_form = False
         st.session_state.pop("oauth_url", None)
         st.query_params.clear()
         st.rerun()
-    st.caption(f"Logged in as: {user.email}")
+    if st.button("Logout"):
+        supabase.auth.sign_out()
+        reset_market_session_state()
+        st.session_state.user = None
+        st.session_state.access_token = None
+        st.session_state.show_auth_form = False
+        st.session_state.pop("oauth_url", None)
+        st.query_params.clear()
+        st.rerun()
 
 st.markdown(
     """
