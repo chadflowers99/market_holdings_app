@@ -825,6 +825,22 @@ if is_guest:
     st.success("Guest mode is active.")
     st.info("You are viewing a read-only preview. Sign in to access your holdings, trades, and history.")
 
+    st.markdown("### Trade Form (Preview)")
+    with st.form("trade_form_guest_preview", clear_on_submit=False):
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.text_input("Stock Symbol", value="AAPL", disabled=True)
+        with col2:
+            st.text_input("Quantity", value="10", disabled=True)
+        with col3:
+            st.text_input("Price per Share", value="215.50", disabled=True)
+
+        btn_col1, btn_col2 = st.columns(2)
+        with btn_col1:
+            st.form_submit_button("Log Buy", use_container_width=True, disabled=True)
+        with btn_col2:
+            st.form_submit_button("Log Sell", use_container_width=True, disabled=True)
+
     preview_col1, preview_col2 = st.columns(2)
     with preview_col1:
         st.metric("Running Realized P/L", "$0.00")
@@ -832,10 +848,14 @@ if is_guest:
         st.metric("Active Lots", "0")
 
     st.markdown("### Preview: Current Holdings")
-    st.dataframe([], use_container_width=True, hide_index=True)
+    holdings_preview = pd.DataFrame(columns=["SYMBOL", "QTY", "PRICE"])
+    st.dataframe(holdings_preview, use_container_width=True, hide_index=True)
 
     st.markdown("### Preview: Trade History")
-    st.caption("No trade history available in guest mode.")
+    with st.expander("Trade History", expanded=False):
+        history_preview = pd.DataFrame(columns=["TRADE DATE", "ACTION", "SYMBOL", "QTY", "PRICE"])
+        st.dataframe(history_preview, use_container_width=True, hide_index=True)
+        st.caption("No trade history available in guest mode.")
     st.stop()
 
 user_id = user.id
