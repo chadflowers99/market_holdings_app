@@ -6,7 +6,7 @@ A multi-user Streamlit app for lot-level stock portfolio tracking with Supabase 
 
 - Lot-level holdings and sell tracking
 - Permanent trade ledger
-- Email/password and Google OAuth login
+- Email/password login
 - RLS-backed per-user data isolation
 
 ## Quick Start
@@ -48,7 +48,3 @@ All data syncs to Supabase PostgreSQL:
 3. Streamlit Cloud secrets:
    - `SUPABASE_URL`
    - `SUPABASE_ANON_KEY`
-4. Supabase Auth redirect configuration:
-   - `https://pb-marketholdings.streamlit.app`
-   - `https://pb-flexbudget.streamlit.app`
-   - Optional local dev: `http://localhost:8501`

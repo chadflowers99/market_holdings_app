@@ -131,30 +131,6 @@ def _clear_trace_file():
         return False
 
 
-def _resolve_oauth_redirect_url() -> str:
-    """Build OAuth callback URL for current host, with secrets override support."""
-    configured = (
-        _secret_get("OAUTH_REDIRECT_URL")
-        or _secret_get("APP_REDIRECT_URL")
-        or (supabase_block.get("OAUTH_REDIRECT_URL") if isinstance(supabase_block, dict) else None)
-    )
-    if isinstance(configured, str) and configured.strip():
-        return configured.strip()
-
-    try:
-        headers = getattr(st.context, "headers", {})
-        host = (headers.get("x-forwarded-host") or headers.get("host") or "").strip()
-        proto = (headers.get("x-forwarded-proto") or "https").split(",")[0].strip()
-        if host:
-            if host.startswith("localhost") or host.startswith("127.0.0.1"):
-                proto = "http"
-            return f"{proto}://{host}"
-    except Exception:
-        pass
-
-    return "https://pb-stocktrade.streamlit.app"
-
-
 class SessionStateAuthStorage:
     """Use only session_state, which persists within a single Streamlit session."""
     def get_item(self, key):
@@ -242,7 +218,7 @@ def _is_writable(path: Path) -> bool:
 
 
 def _build_auth_storage():
-    """Use file-backed storage when possible so PKCE verifier survives OAuth redirect."""
+    """Use file-backed storage when possible so auth state survives reruns/restarts."""
     if _is_writable(AUTH_STORAGE_FILE):
         return FileAuthStorage(AUTH_STORAGE_FILE)
     if _is_writable(AUTH_STORAGE_FILE_FALLBACK):
@@ -273,8 +249,6 @@ def reset_market_session_state() -> None:
     keys_to_clear = [
         "_supabase_auth_store",
         "_supabase_client",
-        "oauth_url",
-        "oauth_redirect_to",
         "trade_history_action_filter",
         "trade_history_symbol_filter",
         "trade_history_date_filter_mode",
@@ -308,38 +282,6 @@ def auth_ui():
     # Privacy-first behavior: do not auto-restore an existing auth session.
     # Users must explicitly choose to sign in from the landing page.
 
-    oauth_error = st.query_params.get("error")
-    oauth_error_description = st.query_params.get("error_description")
-    if oauth_error:
-        st.error(
-            f"Login attempt failed: {oauth_error}"
-            + (f" ({oauth_error_description})" if oauth_error_description else "")
-        )
-        st.query_params.clear()
-
-    # Handle OAuth callback from Supabase (PKCE flow).
-    auth_code = st.query_params.get("code")
-    if auth_code:
-        try:
-            response = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
-            if response and response.user:
-                st.session_state.user = response.user
-                st.session_state.access_token = response.session.access_token if response.session else None
-                # Set the session on the Supabase client so RLS works
-                if response.session:
-                    supabase.auth.set_session(response.session.access_token, response.session.refresh_token)
-                st.session_state.pop("oauth_url", None)
-                st.query_params.clear()
-                st.rerun()
-            else:
-                st.error("Login attempt failed: no user returned from Supabase callback.")
-                st.session_state.pop("oauth_url", None)
-                st.query_params.clear()
-        except Exception as e:
-            st.error(f"Login attempt failed: {str(e)}")
-            st.session_state.pop("oauth_url", None)
-            st.query_params.clear()
-
     st.markdown(
         """
         <div style="text-align: center;">
@@ -370,7 +312,7 @@ def auth_ui():
     col_l, col_m, col_r = st.columns([1, 2, 1])
     with col_m:
         st.markdown("### Authentication")
-        auth_tab1, auth_tab2, auth_tab3 = st.tabs(["Login", "Sign Up", "Google"])
+        auth_tab1, auth_tab2 = st.tabs(["Login", "Sign Up"])
 
         with auth_tab1:
             email = st.text_input("Email", key="login_email")
@@ -412,36 +354,6 @@ def auth_ui():
                     st.success("Account created! Log in with your credentials.")
                 except Exception as e:
                     st.error(f"Sign up failed: {str(e)}")
-
-        with auth_tab3:
-            # Skip button rendering during callback (callback handler processes it above)
-            if not (st.query_params.get("code") or st.query_params.get("error")):
-                st.info("Click the button below to sign in with Google")
-                redirect_to = _resolve_oauth_redirect_url()
-                
-                # Cache the OAuth URL to avoid regenerating the PKCE verifier on each render
-                should_refresh_oauth = (
-                    "oauth_url" not in st.session_state
-                    or st.session_state.get("oauth_redirect_to") != redirect_to
-                )
-                if should_refresh_oauth:
-                    try:
-                        response = supabase.auth.sign_in_with_oauth(
-                            {
-                                "provider": "google",
-                                "options": {"redirect_to": redirect_to}
-                            }
-                        )
-                        st.session_state.oauth_url = response.url if (response and hasattr(response, 'url')) else None
-                        st.session_state.oauth_redirect_to = redirect_to
-                    except Exception as e:
-                        st.error(f"Google sign in error: {str(e)}")
-                
-                oauth_url = st.session_state.get("oauth_url")
-                if oauth_url:
-                    st.link_button("Sign In with Google", oauth_url, use_container_width=True)
-                else:
-                    st.error("Could not generate Google sign-in URL")
 
     return None
 
@@ -900,7 +812,6 @@ with st.sidebar:
         st.session_state.access_token = None
         st.session_state.guest_mode = True
         st.session_state.show_auth_form = False
-        st.session_state.pop("oauth_url", None)
         st.query_params.clear()
         st.rerun()
     if st.button("Logout"):
@@ -909,7 +820,6 @@ with st.sidebar:
         st.session_state.user = None
         st.session_state.access_token = None
         st.session_state.show_auth_form = False
-        st.session_state.pop("oauth_url", None)
         st.query_params.clear()
         st.rerun()
 
