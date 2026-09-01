@@ -6,7 +6,7 @@ A multi-user Streamlit app for lot-level stock portfolio tracking with Supabase 
 
 - Lot-level holdings and sell tracking
 - Permanent trade ledger
-- Email/password login
+- Email/password and Google OAuth login
 - RLS-backed per-user data isolation
 
 ## Quick Start
@@ -29,6 +29,17 @@ A multi-user Streamlit app for lot-level stock portfolio tracking with Supabase 
    ```powershell
    streamlit run app.py
    ```
+
+## Google Sign-In Setup
+
+1. In Google Cloud Console, create OAuth 2.0 Web application credentials and
+   add `https://<project-ref>.supabase.co/auth/v1/callback` as an authorized redirect URI.
+2. In Supabase Dashboard, open Authentication > Providers > Google, enable it,
+   and enter the Google client ID and client secret.
+3. In Supabase Dashboard, open Authentication > URL Configuration and add the
+   deployed app URL and `http://localhost:8501` to Redirect URLs.
+4. Optionally set `OAUTH_REDIRECT_URL` in Streamlit secrets to the deployed
+   app URL. Otherwise, the app derives the current host automatically.
 
 ## Data Storage
 

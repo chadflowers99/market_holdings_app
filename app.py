@@ -246,20 +246,40 @@ def _client_storage_namespace() -> str:
     """Build a stable per-client namespace from request headers."""
     try:
         headers = getattr(st.context, "headers", {})
+        # Mobile network IP headers can change during the external OAuth redirect.
         user_agent = str(headers.get("user-agent") or "")
-        forwarded_for = (
-            str(headers.get("cf-connecting-ip") or "")
-            or str(headers.get("x-real-ip") or "")
-            or str(headers.get("x-forwarded-for") or "")
-        )
         accept_lang = str(headers.get("accept-language") or "")
         host = str(headers.get("host") or "")
-        raw = "|".join([user_agent, forwarded_for, accept_lang, host])
+        raw = "|".join([user_agent, accept_lang, host])
         if not raw.strip("|"):
             return "default"
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
     except Exception:
         return "default"
+
+
+def _resolve_oauth_redirect_url() -> str:
+    """Return the configured OAuth callback URL or derive it from the request."""
+    configured = (
+        _secret_get("OAUTH_REDIRECT_URL")
+        or _secret_get("APP_REDIRECT_URL")
+        or supabase_block.get("OAUTH_REDIRECT_URL")
+    )
+    if isinstance(configured, str) and configured.strip():
+        return configured.strip()
+
+    try:
+        headers = getattr(st.context, "headers", {})
+        host = str(headers.get("x-forwarded-host") or headers.get("host") or "").strip()
+        protocol = str(headers.get("x-forwarded-proto") or "https").split(",")[0].strip()
+        if host:
+            if host.startswith("localhost") or host.startswith("127.0.0.1"):
+                protocol = "http"
+            return f"{protocol}://{host}"
+    except Exception:
+        pass
+
+    return "https://pb-marketholdings.streamlit.app"
 
 
 # Initialize Supabase client with session-scoped storage backend.
@@ -315,6 +335,34 @@ def auth_ui():
     if st.session_state.user:
         return st.session_state.user
 
+    oauth_error = st.query_params.get("error")
+    oauth_error_description = st.query_params.get("error_description")
+    if oauth_error:
+        st.error(
+            f"Google sign-in failed: {oauth_error}"
+            + (f" ({oauth_error_description})" if oauth_error_description else "")
+        )
+        st.query_params.clear()
+
+    auth_code = st.query_params.get("code")
+    if auth_code:
+        try:
+            response = supabase.auth.exchange_code_for_session({"auth_code": auth_code})
+            if not response.user or not response.session:
+                raise RuntimeError("No user session returned from the Google callback.")
+            st.session_state.user = response.user
+            st.session_state.access_token = response.session.access_token
+            supabase.auth.set_session(response.session.access_token, response.session.refresh_token)
+            st.session_state.pop("oauth_url", None)
+            st.session_state.pop("oauth_redirect_to", None)
+            st.query_params.clear()
+            st.rerun()
+        except Exception as e:
+            st.error(f"Google sign-in failed: {str(e)}")
+            st.session_state.pop("oauth_url", None)
+            st.session_state.pop("oauth_redirect_to", None)
+            st.query_params.clear()
+
     # Restore persisted Supabase session so browser refresh keeps users logged in.
     try:
         session_response = supabase.auth.get_session()
@@ -368,7 +416,7 @@ def auth_ui():
     col_l, col_m, col_r = st.columns([1, 2, 1])
     with col_m:
         st.markdown("### Authentication")
-        auth_tab1, auth_tab2 = st.tabs(["Login", "Sign Up"])
+        auth_tab1, auth_tab2, auth_tab3 = st.tabs(["Login", "Sign Up", "Google"])
 
         with auth_tab1:
             email = st.text_input("Email", key="login_email")
@@ -410,6 +458,28 @@ def auth_ui():
                     st.success("Account created! Log in with your credentials.")
                 except Exception as e:
                     st.error(f"Sign up failed: {str(e)}")
+
+        with auth_tab3:
+            redirect_to = _resolve_oauth_redirect_url()
+            should_refresh_oauth = (
+                "oauth_url" not in st.session_state
+                or st.session_state.get("oauth_redirect_to") != redirect_to
+            )
+            if should_refresh_oauth:
+                try:
+                    response = supabase.auth.sign_in_with_oauth(
+                        {"provider": "google", "options": {"redirect_to": redirect_to}}
+                    )
+                    st.session_state.oauth_url = response.url
+                    st.session_state.oauth_redirect_to = redirect_to
+                except Exception as e:
+                    st.error(f"Could not start Google sign-in: {str(e)}")
+
+            oauth_url = st.session_state.get("oauth_url")
+            if oauth_url:
+                st.link_button("Sign in with Google", oauth_url, use_container_width=True)
+            else:
+                st.error("Could not generate the Google sign-in link.")
 
     return None
 
@@ -464,7 +534,7 @@ def save_portfolio_row(lot, trace_id: str = "system"):
     try:
         user_id = st.session_state.user.id
         lot_with_user = {**lot, "user_id": user_id}
-        
+
         # If lot has an id, update it; otherwise insert new
         if "id" in lot_with_user and lot_with_user["id"]:
             # Update existing lot
@@ -649,7 +719,7 @@ def load_running_realized_pl():
 
     try:
         user_id = st.session_state.user.id
-        
+
         # Query permanent_ledger and aggregate by symbol
         response = supabase.table("permanent_ledger").select("symbol, realized_pl").eq(
             "user_id", user_id
