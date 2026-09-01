@@ -743,6 +743,45 @@ def _ledger_sort_key(record):
     return (str(record.get("timestamp", "")), str(record.get("id", "")))
 
 
+def _validate_ledger_records(ledger_rows) -> str | None:
+    """Return an error when a historical sell exceeds shares owned at that time."""
+    quantities_by_symbol: dict[str, int] = {}
+    for record in sorted(ledger_rows, key=_ledger_sort_key):
+        action = str(record.get("action", "")).upper()
+        symbol = str(record.get("symbol", "")).strip().upper()
+        quantity = int(record.get("quantity", 0) or 0)
+        if not symbol or quantity <= 0:
+            continue
+        if action == "BUY":
+            quantities_by_symbol[symbol] = quantities_by_symbol.get(symbol, 0) + quantity
+        elif action == "SELL":
+            available = quantities_by_symbol.get(symbol, 0)
+            if quantity > available:
+                trade_date = str(record.get("timestamp", ""))[:10] or "unknown date"
+                return (
+                    f"Cannot save this change: the {trade_date} sell of {quantity} {symbol} shares "
+                    f"has only {available} shares available from earlier buys."
+                )
+            quantities_by_symbol[symbol] = available - quantity
+    return None
+
+
+def _records_after_ledger_change(user_id, selected_record, replacement):
+    """Return a proposed ledger after replacing or removing one selected record."""
+    response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).execute()
+    ledger_rows = list(response.data or [])
+    selected_id = selected_record.get("id")
+    for index, record in enumerate(ledger_rows):
+        is_selected = record.get("id") == selected_id if selected_id is not None else record == selected_record
+        if is_selected:
+            if replacement is None:
+                ledger_rows.pop(index)
+            else:
+                ledger_rows[index] = {**record, **replacement}
+            return ledger_rows
+    raise ValueError("The selected trade could not be found. Refresh and try again.")
+
+
 def _update_ledger_record(record, updates):
     """Update one ledger row using id when available, otherwise a strict row match."""
     query = supabase.table("permanent_ledger").update(updates)
@@ -773,6 +812,9 @@ def rebuild_portfolio_from_ledger(user_id):
     """Replays the entire ledger to rebuild current holdings and realized P/L consistency."""
     ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).execute()
     ledger_rows = list(ledger_response.data or [])
+    validation_error = _validate_ledger_records(ledger_rows)
+    if validation_error:
+        raise ValueError(validation_error)
     ledger_rows.sort(key=_ledger_sort_key)
 
     open_lots = []
@@ -1201,6 +1243,12 @@ with st.expander("Trade History", expanded=False):
                                     "quantity": parsed_edit_qty,
                                     "price": parsed_edit_price,
                                 }
+                                proposed_ledger = _records_after_ledger_change(
+                                    user_id, selected_trade, updated_record
+                                )
+                                validation_error = _validate_ledger_records(proposed_ledger)
+                                if validation_error:
+                                    raise ValueError(validation_error)
                                 _update_ledger_record(selected_trade, updated_record)
                                 rebuild_portfolio_from_ledger(user_id)
                                 st.success("Trade updated and portfolio recalculated.")
@@ -1209,6 +1257,10 @@ with st.expander("Trade History", expanded=False):
                                 st.error(f"Failed to update trade: {str(e)}")
                         elif delete_trade_edit:
                             try:
+                                proposed_ledger = _records_after_ledger_change(user_id, selected_trade, None)
+                                validation_error = _validate_ledger_records(proposed_ledger)
+                                if validation_error:
+                                    raise ValueError(validation_error)
                                 _delete_ledger_record(selected_trade)
                                 rebuild_portfolio_from_ledger(user_id)
                                 st.success("Trade deleted and portfolio recalculated.")
