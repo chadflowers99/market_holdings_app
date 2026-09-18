@@ -386,6 +386,15 @@ def auth_ui():
     except Exception:
         pass
 
+    # Let an uptime pinger (e.g. cron-job.org) land directly in guest mode via ?guest=true.
+    guest_param = str(st.query_params.get("guest") or "").strip().lower()
+    if guest_param in {"1", "true", "yes"}:
+        reset_market_session_state()
+        st.session_state.guest_mode = True
+        st.session_state.show_auth_form = False
+        st.query_params.clear()
+        st.rerun()
+
     st.markdown(
         """
         <div style="text-align: center;">
