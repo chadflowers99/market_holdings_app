@@ -4,11 +4,12 @@ from ipaddress import ip_address
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
 from postgrest.exceptions import APIError
 from streamlit.testing.v1 import AppTest
+import streamlit as st
 
 
 APP_FILE = Path(__file__).with_name("app.py")
@@ -84,12 +85,37 @@ class CashLedgerTests(unittest.TestCase):
         return query
 
     def rpc(self, name, params):
-        self.assertIn(name, ("record_cash_transaction", "clear_cash_transactions"))
+        self.assertIn(name, ("record_cash_transaction", "clear_cash_transactions", "change_cash_transaction"))
         result = Mock()
 
         def execute():
             if name == "clear_cash_transactions":
                 self.rows[:] = [row for row in self.rows if row["user_id"] != "alice"]
+                return SimpleNamespace(data=None)
+            if name == "change_cash_transaction":
+                row = next(
+                    (row for row in self.rows if row.get("id") == params["p_id"] and row["user_id"] == "alice"),
+                    None,
+                )
+                if row is None:
+                    raise APIError({"message": "Transaction not found.", "code": "P0001"})
+                updated = None if params["p_delete"] else {
+                    **row,
+                    "transaction_type": params["p_transaction_type"],
+                    "amount_cents": params["p_amount_cents"],
+                    "timestamp": params["p_timestamp"],
+                    "note": params["p_note"],
+                }
+                proposed = [item for item in self.rows if item is not row]
+                if updated:
+                    proposed.append(updated)
+                balance = sum(
+                    item["amount_cents"] * (1 if item["transaction_type"] == "deposit" else -1)
+                    for item in proposed if item["user_id"] == "alice"
+                )
+                if balance < 0:
+                    raise APIError({"message": "This change would make the available cash balance negative.", "code": "P0001"})
+                self.rows[:] = proposed
                 return SimpleNamespace(data=None)
             amount = params["p_amount_cents"]
             balance = sum(
@@ -99,6 +125,7 @@ class CashLedgerTests(unittest.TestCase):
             if params["p_transaction_type"] == "withdrawal" and amount > balance:
                 raise APIError({"message": "Withdrawal exceeds the available cash balance.", "code": "P0001"})
             self.rows.append({
+                "id": len(self.rows) + 1,
                 "user_id": "alice",
                 "transaction_type": params["p_transaction_type"],
                 "amount_cents": amount,
@@ -217,8 +244,20 @@ class CashLedgerTests(unittest.TestCase):
         ]
         app = self.app()
         self.assertFalse(any(widget.label == "Choose trade" for widget in app.selectbox))
-        self.assertEqual(len([button for button in app.button if button.label == "Edit"]), 2)
-        app.button(key="edit_trade_second").click().run()
+        edit_buttons = [button for button in app.button if button.label == "Edit selected trade"]
+        self.assertEqual(len(edit_buttons), 1)
+        self.assertTrue(edit_buttons[0].disabled)
+        original_dataframe = st.dataframe
+
+        def select_second_trade(*args, **kwargs):
+            result = original_dataframe(*args, **kwargs)
+            if kwargs.get("selection_mode") == "single-row":
+                return {"selection": {"rows": [1]}}
+            return result
+
+        with patch("streamlit.dataframe", side_effect=select_second_trade):
+            app.run()
+            next(button for button in app.button if button.label == "Edit selected trade").click().run()
         self.assertFalse(app.exception)
         self.assertTrue(any(field.label == "Symbol" and field.value == "MSFT" for field in app.text_input))
         self.assertTrue(any(button.label == "Save Changes" for button in app.button))
@@ -271,13 +310,59 @@ class CashLedgerTests(unittest.TestCase):
         self.assertFalse(app.exception)
         holdings = next(expander for expander in app.expander if expander.label == "Current Holdings")
         self.assertFalse(holdings.proto.expanded)
-        self.assertEqual(holdings.metric[0].label, "Running Realized P/L")
+        self.assertEqual(len(holdings.metric), 0)
         table = holdings.dataframe[0].value
         self.assertEqual(table.iloc[0]["SYMBOL"], "AAPL")
         self.assertEqual(table.iloc[0]["QTY"], 2)
         self.assertEqual(table.iloc[0]["PRICE"], 150.25)
         self.assertTrue(any(expander.label == "Cash Ledger" for expander in app.expander))
         self.assertTrue(any(expander.label == "Trade History" for expander in app.expander))
+
+    def test_guest_sale_tracks_lots_without_profit_calculation(self):
+        app = self.app(guest=True)
+        app.session_state["guest_portfolio"] = [
+            {"id": "low", "symbol": "MSFT", "quantity": 2, "avg_price": 100,
+             "last_updated": "2026-10-19T12:00:00"},
+            {"id": "high", "symbol": "MSFT", "quantity": 3, "avg_price": 200,
+             "last_updated": "2026-10-20T12:00:00"},
+        ]
+        next(field for field in app.text_input if field.label == "Stock Symbol").set_value("MSFT")
+        next(field for field in app.text_input if field.label == "Quantity").set_value("3")
+        next(field for field in app.text_input if field.label == "Price per Share").set_value("250")
+        next(button for button in app.button if button.label == "Log Sell").click().run()
+        self.assertFalse(app.exception)
+        lots = [lot for lot in app.session_state["guest_portfolio"] if lot["quantity"] > 0]
+        self.assertEqual([(lot["quantity"], lot["avg_price"]) for lot in lots], [(2, 200)])
+        ledger = app.session_state["guest_ledger"]
+        self.assertEqual([row["quantity"] for row in ledger], [2, 1])
+        self.assertTrue(all(row["realized_pl"] == 0 for row in ledger))
+        self.assertTrue(any(message.value == "Sold 3 shares of MSFT." for message in app.success))
+        self.assertFalse(any("P/L" in metric.label for metric in app.metric))
+
+    def test_rebuild_preserves_historical_pl_and_other_symbol_lots(self):
+        self.trades = [
+            {"id": "a", "timestamp": "2026-10-18", "action": "BUY",
+             "symbol": "AAPL", "quantity": 4, "price": 50},
+            {"id": "m", "timestamp": "2026-10-19", "action": "BUY",
+             "symbol": "MSFT", "quantity": 3, "price": 100},
+            {"id": "s", "timestamp": "2026-10-20", "action": "SELL",
+             "symbol": "MSFT", "quantity": 1, "price": 150, "realized_pl": 50},
+        ]
+        tree = ast.parse(APP_FILE.read_text(encoding="utf-8"))
+        names = {
+            "rebuild_portfolio_from_ledger", "_validate_ledger_records",
+            "_ledger_sort_key", "_update_ledger_record",
+        }
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
+        save_lot = Mock()
+        namespace = {"supabase": self.client, "save_portfolio_row": save_lot}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(APP_FILE), "exec"), namespace)
+        namespace["rebuild_portfolio_from_ledger"]("alice")
+        lots = [call.args[0] for call in save_lot.call_args_list]
+        self.assertEqual([(lot["symbol"], lot["quantity"]) for lot in lots], [("AAPL", 4), ("MSFT", 2)])
+        self.assertEqual(self.trades[2]["realized_pl"], 50)
+        self.assertEqual(self.trades[2]["avg_buy_price"], 100)
+        self.assertTrue(all("realized_pl" not in updates for _, updates in self.trade_updates))
 
     def test_transaction_history_is_displayed_inside_cash_toggle(self):
         self.rows = [{
@@ -296,7 +381,8 @@ class CashLedgerTests(unittest.TestCase):
         cash_toggle = next(expander for expander in app.expander if expander.label == "Cash Ledger")
         self.assertTrue(any("Cash Transaction History" in heading.value for heading in cash_toggle.markdown))
         history = cash_toggle.dataframe[0].value
-        self.assertEqual(list(history.columns), ["DATE / TIME", "TYPE", "AMOUNT", "NOTE"])
+        self.assertEqual(list(history.columns), ["DATE", "TYPE", "AMOUNT", "NOTE"])
+        self.assertEqual(history.iloc[0]["DATE"], "2026-10-20")
         self.assertEqual(history.iloc[0]["AMOUNT"], "$12.34")
         self.assertEqual(history.iloc[0]["NOTE"], "private note")
 
@@ -326,6 +412,101 @@ class CashLedgerTests(unittest.TestCase):
         next(button for button in app.button if button.label == "Clear all cash transactions").click().run()
         self.assertFalse(app.exception)
         self.assertEqual(self.balance(app), "$0.00")
+        self.client.rpc.assert_not_called()
+
+    def cash_dialog_app(self, transaction):
+        tree = ast.parse(APP_FILE.read_text(encoding="utf-8"))
+        functions = [
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name in {"_edit_cash_dialog", "_cash_amount_to_cents"}
+        ]
+        for function in functions:
+            function.decorator_list = []
+        source = (
+            "import streamlit as st\nfrom datetime import datetime\n"
+            "from decimal import Decimal, InvalidOperation\n"
+            "supabase = st.session_state.client\n"
+            + ast.unparse(ast.Module(body=functions, type_ignores=[]))
+            + "\n_edit_cash_dialog(st.session_state.transaction)\n"
+        )
+        app = AppTest.from_string(source)
+        app.session_state["client"] = self.client
+        app.session_state["transaction"] = transaction.copy()
+        app.run()
+        self.assertFalse(app.exception)
+        return app
+
+    def cash_row(self, row_id=1, kind="deposit", amount=10000, user="alice"):
+        return {
+            "id": row_id, "user_id": user, "transaction_type": kind,
+            "amount_cents": amount, "timestamp": "2026-10-20T12:34:56.123456+02:00", "note": "original",
+        }
+
+    def test_cash_selection_opens_correct_dialog(self):
+        self.rows = [self.cash_row(), self.cash_row(2, amount=2000)]
+        app = self.app()
+        app.toggle(key="show_cash_history").set_value(True).run()
+        button = next(button for button in app.button if button.label == "Edit selected transaction")
+        self.assertTrue(button.disabled)
+        original_dataframe = st.dataframe
+
+        def select_cash_row(*args, **kwargs):
+            result = original_dataframe(*args, **kwargs)
+            if str(kwargs.get("key", "")).startswith("cash_selection_"):
+                return {"selection": {"rows": [0]}}
+            return result
+
+        with patch("streamlit.dataframe", side_effect=select_cash_row):
+            app.run()
+            next(button for button in app.button if button.label == "Edit selected transaction").click().run()
+        self.assertFalse(app.exception)
+        self.assertTrue(any(field.label == "Amount ($)" and field.value == "20.00" for field in app.text_input))
+        self.assertTrue(any(button.label == "Delete Transaction" for button in app.button))
+        self.assertTrue(any(button.label == "Clear all cash transactions" for button in app.button))
+
+    def test_cash_edit_all_fields_preserves_time(self):
+        self.rows = [self.cash_row(), self.cash_row(2, amount=2000)]
+        app = self.cash_dialog_app(self.rows[1])
+        next(field for field in app.date_input if field.label == "Transaction date").set_value(date(2026, 10, 18))
+        next(field for field in app.selectbox if field.label == "Transaction type").select("Withdrawal")
+        next(field for field in app.text_input if field.label == "Amount ($)").set_value("15.25")
+        next(field for field in app.text_input if field.label == "Note").set_value(" corrected ")
+        next(button for button in app.button if button.label == "Save Changes").click().run()
+        self.assertFalse(app.exception)
+        updated = next(row for row in self.rows if row["id"] == 2)
+        self.assertEqual(updated["timestamp"], "2026-10-18T12:34:56.123456+02:00")
+        self.assertEqual(updated["transaction_type"], "withdrawal")
+        self.assertEqual(updated["amount_cents"], 1525)
+        self.assertEqual(updated["note"], "corrected")
+
+    def test_cash_edit_or_delete_cannot_make_balance_negative(self):
+        for deleting in (False, True):
+            with self.subTest(deleting=deleting):
+                self.rows = [self.cash_row(), self.cash_row(2, "withdrawal", 8000)]
+                before = [row.copy() for row in self.rows]
+                app = self.cash_dialog_app(self.rows[0])
+                if not deleting:
+                    next(field for field in app.text_input if field.label == "Amount ($)").set_value("10")
+                label = "Delete Transaction" if deleting else "Save Changes"
+                next(button for button in app.button if button.label == label).click().run()
+                self.assertFalse(app.exception)
+                self.assertTrue(any("negative" in error.value for error in app.error))
+                self.assertEqual(self.rows, before)
+
+    def test_cash_delete_removes_only_selected_transaction(self):
+        self.rows = [self.cash_row(), self.cash_row(2, "withdrawal", 2000), self.cash_row(3, user="bob")]
+        app = self.cash_dialog_app(self.rows[1])
+        next(button for button in app.button if button.label == "Delete Transaction").click().run()
+        self.assertFalse(app.exception)
+        self.assertEqual([row["id"] for row in self.rows], [1, 3])
+        self.client.rpc.assert_called_with("change_cash_transaction", {"p_id": 2, "p_delete": True})
+
+    def test_invalid_cash_edit_does_not_write(self):
+        self.rows = [self.cash_row()]
+        app = self.cash_dialog_app(self.rows[0])
+        next(field for field in app.text_input if field.label == "Amount ($)").set_value("1.001")
+        next(button for button in app.button if button.label == "Save Changes").click().run()
+        self.assertTrue(any("whole cents" in error.value for error in app.error))
         self.client.rpc.assert_not_called()
 
 

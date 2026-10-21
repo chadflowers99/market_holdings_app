@@ -5,15 +5,21 @@ A multi-user Streamlit app for lot-level stock portfolio tracking with Supabase 
 ## Features
 
 - Lot-level holdings and sell tracking
-- Collapsed-by-default Current Holdings toggle for the holdings table and realized P/L
+- Collapsed-by-default Current Holdings toggle for the lot tracking table
 - Permanent trade ledger
-- Per-trade edit buttons open an edit/delete dialog; confirmed Delete All remains separate
+- Select a Trade History row and use Edit selected trade to open its edit/delete dialog; confirmed Delete All remains separate
 - Trade dates can be edited while preserving time/timezone and validating buy/sell chronology
 - Separate per-user cash ledger for deposits and withdrawals
 - Email/password and Google OAuth login
 - RLS-backed per-user data isolation
 
 ## Quick Start
+
+Local lot-only trial: realized P/L is not calculated or displayed. Existing
+historical P/L values are preserved; new ledger rows use zero for compatibility
+with the existing database schema. Lot quantities, purchase costs, and
+lowest-buy-first matching are retained. Signed-in local trades still write to
+the configured Supabase database, so this trial can affect the online app's data.
 
 1. Install dependencies:
 
@@ -37,7 +43,8 @@ A multi-user Streamlit app for lot-level stock portfolio tracking with Supabase 
 4. Sign in and expand **Cash Ledger** to record deposits and withdrawals. Cash
    transactions are saved to Supabase separately from stock holdings. The
    ledger shows your available cash balance and newest-first transaction
-   history inside the privacy toggle. Guest-mode cash entries remain temporary.
+   history with dates only inside the privacy toggle. Full timestamps remain
+   stored for ordering. Guest-mode cash entries remain temporary.
    The Supabase cash table and `record_cash_transaction` function must already
    be installed; see `supabase/migrations/20261020_create_cash_transactions.sql`.
    **Show transaction history** is off by default. Inside history, **Clear all
@@ -46,6 +53,14 @@ A multi-user Streamlit app for lot-level stock portfolio tracking with Supabase 
    `supabase/migrations/20261021_clear_cash_transactions.sql` in the Supabase SQL
    Editor once. Running the migration sets up deletion permissions/function;
    it does not clear any cash until you confirm the action in the app.
+   Select a cash-history row and click **Edit selected transaction** to edit
+   its date, type, amount, or note, or choose **Delete Transaction** in the
+   dialog. Clear all remains a separate confirmed action. Changes that would
+   make the current cash balance negative are rejected. Date edits preserve
+   time/timezone; history still displays only the date.
+   Apply `supabase/migrations/20261022_edit_cash_transactions.sql` once in the
+   Supabase SQL Editor to enable signed-in edits and individual deletions.
+   Applying this migration does not modify existing cash records.
 
 ## Google Sign-In Setup
 

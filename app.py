@@ -603,7 +603,7 @@ def delete_lot_from_db(symbol, last_updated, trace_id: str = "system"):
         return False
 
 
-def log_to_db(symbol, action, qty, price, avg_buy, pl_value, trace_id: str = "system"):
+def log_to_db(symbol, action, qty, price, avg_buy, trace_id: str = "system"):
     """Appends a permanent trade record to Supabase permanent_ledger."""
     if st.session_state.get("guest_mode"):
         if "guest_ledger" not in st.session_state:
@@ -618,7 +618,7 @@ def log_to_db(symbol, action, qty, price, avg_buy, pl_value, trace_id: str = "sy
                 "quantity": qty,
                 "price": price,
                 "avg_buy_price": avg_buy,
-                "realized_pl": pl_value,
+                "realized_pl": 0.0,
             }
         )
         return True
@@ -638,7 +638,7 @@ def log_to_db(symbol, action, qty, price, avg_buy, pl_value, trace_id: str = "sy
             "quantity": qty,
             "price": price,
             "avg_buy_price": avg_buy,
-            "realized_pl": pl_value,
+            "realized_pl": 0.0,
         }
 
         _trace_marker(
@@ -672,7 +672,7 @@ def handle_trade(action, symbol, quantity, price):
             "last_updated": now,
         }
         save_portfolio_row(new_lot, trace_id=trace_id)
-        log_to_db(symbol, "BUY", quantity, price, price, 0.0, trace_id=trace_id)
+        log_to_db(symbol, "BUY", quantity, price, price, trace_id=trace_id)
         _trace_marker(trace_id, "trade.handle", "done", "buy_complete")
         return True, f"Bought {quantity} shares of {symbol} @ ${price:.2f}."
 
@@ -686,17 +686,13 @@ def handle_trade(action, symbol, quantity, price):
         return False, f"Cannot sell {quantity} shares. You only own {total_qty} shares of {symbol}."
 
     remaining_to_sell = quantity
-    total_realized_pl = 0.0
 
     for lot in sorted(symbol_lots, key=lambda x: (x["avg_price"], x["last_updated"])):
         if remaining_to_sell <= 0:
             break
 
         consumed = min(lot["quantity"], remaining_to_sell)
-        lot_realized_pl = (price - lot["avg_price"]) * consumed
-        total_realized_pl += lot_realized_pl
-
-        log_to_db(symbol, "SELL", consumed, price, lot["avg_price"], lot_realized_pl, trace_id=trace_id)
+        log_to_db(symbol, "SELL", consumed, price, lot["avg_price"], trace_id=trace_id)
 
         # Save original timestamp before updating
         original_last_updated = lot["last_updated"]
@@ -710,45 +706,8 @@ def handle_trade(action, symbol, quantity, price):
 
         remaining_to_sell -= consumed
 
-    pl_status = "Profit" if total_realized_pl >= 0 else "Loss"
-    _trace_marker(trace_id, "trade.handle", "done", f"sell_complete realized={total_realized_pl:.2f}")
-    return True, f"Sold {quantity} shares of {symbol}. Realized {pl_status}: ${abs(total_realized_pl):.2f}."
-
-
-def load_running_realized_pl():
-    """Returns running realized P/L by symbol and overall total from Supabase."""
-    if st.session_state.get("guest_mode"):
-        pl_by_symbol = {}
-        for row in st.session_state.get("guest_ledger", []):
-            symbol = row.get("symbol", "")
-            pl = float(row.get("realized_pl", 0.0) or 0.0)
-            if symbol:
-                pl_by_symbol[symbol] = pl_by_symbol.get(symbol, 0.0) + pl
-        total_pl = sum(pl_by_symbol.values())
-        return pl_by_symbol, total_pl
-
-    if not st.session_state.get("user"):
-        return {}, 0.0
-
-    try:
-        user_id = st.session_state.user.id
-
-        # Query permanent_ledger and aggregate by symbol
-        response = supabase.table("permanent_ledger").select("symbol, realized_pl").eq(
-            "user_id", user_id
-        ).execute()
-
-        pl_by_symbol = {}
-        for row in response.data:
-            symbol = row["symbol"]
-            pl = float(row.get("realized_pl", 0.0))
-            pl_by_symbol[symbol] = pl_by_symbol.get(symbol, 0.0) + pl
-
-        total_pl = sum(pl_by_symbol.values())
-        return pl_by_symbol, total_pl
-    except Exception as e:
-        st.error(f"Failed to load P/L: {str(e)}")
-        return {}, 0.0
+    _trace_marker(trace_id, "trade.handle", "done", "sell_complete")
+    return True, f"Sold {quantity} shares of {symbol}."
 
 
 def _ledger_sort_key(record):
@@ -822,7 +781,7 @@ def _delete_ledger_record(record):
 
 
 def rebuild_portfolio_from_ledger(user_id):
-    """Replays the entire ledger to rebuild current holdings and realized P/L consistency."""
+    """Replay the ledger to rebuild lots and purchase cost without calculating P/L."""
     ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).execute()
     ledger_rows = list(ledger_response.data or [])
     validation_error = _validate_ledger_records(ledger_rows)
@@ -858,15 +817,14 @@ def rebuild_portfolio_from_ledger(user_id):
 
         remaining = quantity
         consumed_total = 0
-        realized_total = 0.0
         cost_basis_total = 0.0
 
-        for lot in sorted(open_lots, key=lambda x: (x["avg_price"], x["last_updated"])):
+        symbol_lots = [lot for lot in open_lots if lot["symbol"] == symbol]
+        for lot in sorted(symbol_lots, key=lambda x: (x["avg_price"], x["last_updated"])):
             if remaining <= 0:
                 break
 
             consumed = min(lot["quantity"], remaining)
-            realized_total += (price - lot["avg_price"]) * consumed
             cost_basis_total += lot["avg_price"] * consumed
             lot["quantity"] -= consumed
             remaining -= consumed
@@ -879,7 +837,6 @@ def rebuild_portfolio_from_ledger(user_id):
             record,
             {
                 "avg_buy_price": avg_buy_price,
-                "realized_pl": realized_total,
             },
         )
 
@@ -1003,7 +960,7 @@ def _load_cash_transactions(user_id: str) -> list[dict]:
     while True:
         response = (
             supabase.table("cash_transactions")
-            .select("transaction_type, amount_cents, timestamp, note")
+            .select("id, transaction_type, amount_cents, timestamp, note")
             .eq("user_id", user_id)
             .order("timestamp", desc=True)
             .order("id", desc=True)
@@ -1026,6 +983,47 @@ def _record_cash_transaction(transaction_type: str, amount_cents: int, note: str
             "p_note": note,
         },
     ).execute()
+
+
+@st.dialog("Edit cash transaction")
+def _edit_cash_dialog(transaction):
+    timestamp_text = str(transaction["timestamp"])
+    try:
+        transaction_date = datetime.fromisoformat(timestamp_text).date()
+    except ValueError:
+        st.error("This transaction has an invalid date. Correct its timestamp in the database before editing.")
+        return
+    with st.form("edit_cash_form"):
+        edit_date = st.date_input("Transaction date", value=transaction_date)
+        edit_type = st.selectbox(
+            "Transaction type", ["Deposit", "Withdrawal"],
+            index=0 if transaction["transaction_type"] == "deposit" else 1,
+        )
+        edit_amount = st.text_input(
+            "Amount ($)", value=f"{Decimal(transaction['amount_cents']) / 100:.2f}"
+        )
+        edit_note = st.text_input("Note", value=transaction["note"])
+        save_col, delete_col = st.columns(2)
+        with save_col:
+            save_cash = st.form_submit_button("Save Changes", use_container_width=True)
+        with delete_col:
+            delete_cash = st.form_submit_button("Delete Transaction", use_container_width=True)
+
+    if save_cash or delete_cash:
+        try:
+            params = {"p_id": transaction["id"], "p_delete": delete_cash}
+            if save_cash:
+                params.update({
+                    "p_transaction_type": edit_type.lower(),
+                    "p_amount_cents": _cash_amount_to_cents(edit_amount),
+                    "p_timestamp": edit_date.isoformat() + timestamp_text[10:],
+                    "p_note": edit_note.strip(),
+                })
+            supabase.rpc("change_cash_transaction", params).execute()
+        except Exception as exc:
+            st.error(f"Cash change could not be confirmed. Refresh before retrying: {exc}")
+        else:
+            st.rerun()
 
 
 # Main App
@@ -1195,8 +1193,6 @@ with st.expander("Cash Ledger", expanded=False):
             st.metric("Available cash", f"${_cash_balance_cents(cash_transactions) / 100:,.2f}")
             if is_guest:
                 st.caption("Guest-mode entries are temporary and will be cleared when the session is reset.")
-            else:
-                st.caption("Saved to your account. Cash is separate from stock holdings and trade calculations.")
             if st.toggle("Show transaction history", value=False, key="show_cash_history"):
                 st.markdown("#### Cash Transaction History")
                 if cash_transactions:
@@ -1220,7 +1216,7 @@ with st.expander("Cash Ledger", expanded=False):
                             else:
                                 st.session_state.cash_clear_notice = True
                                 st.rerun()
-                    ordered_cash = reversed(cash_transactions) if is_guest else cash_transactions
+                    ordered_cash = list(reversed(cash_transactions)) if is_guest else cash_transactions
                     cash_history_rows = []
                     for transaction in ordered_cash:
                         amount = int(transaction["amount_cents"]) / 100
@@ -1228,13 +1224,35 @@ with st.expander("Cash Ledger", expanded=False):
                             amount = -amount
                         cash_history_rows.append(
                             {
-                                "DATE / TIME": transaction["timestamp"].replace("T", " "),
+                                "DATE": transaction["timestamp"][:10],
                                 "TYPE": transaction["transaction_type"].title(),
                                 "AMOUNT": f"${amount:,.2f}",
                                 "NOTE": transaction["note"],
                             }
                         )
-                    st.dataframe(cash_history_rows, use_container_width=True, hide_index=True)
+                    if is_guest:
+                        st.dataframe(cash_history_rows, use_container_width=True, hide_index=True)
+                        st.caption("Guest mode: transaction editing and individual deletion are disabled.")
+                    else:
+                        cash_selection_key = "cash_selection_" + hashlib.sha256(
+                            json.dumps([user_id, cash_transactions], sort_keys=True, default=str).encode("utf-8")
+                        ).hexdigest()[:16]
+                        cash_table = st.dataframe(
+                            cash_history_rows,
+                            use_container_width=True,
+                            hide_index=True,
+                            on_select="rerun",
+                            selection_mode="single-row",
+                            key=cash_selection_key,
+                        )
+                        selected_cash_rows = cash_table["selection"]["rows"]
+                        st.caption("Select a transaction row, then click Edit selected transaction.")
+                        if st.button(
+                            "Edit selected transaction",
+                            icon=":material/edit:",
+                            disabled=not selected_cash_rows,
+                        ):
+                            _edit_cash_dialog(ordered_cash[selected_cash_rows[0]])
                 else:
                     st.info("No cash transactions recorded yet.")
 
@@ -1280,10 +1298,6 @@ if submit_buy or submit_sell:
 # Holdings Display
 with st.expander("Current Holdings", expanded=False):
     current_portfolio = load_portfolio()
-    running_pl_by_symbol, running_total_pl = load_running_realized_pl()
-
-    st.metric("Running Realized P/L", f"${running_total_pl:,.2f}")
-
     if current_portfolio:
         display_rows = []
         for lot in sorted(current_portfolio, key=lambda x: (x["symbol"], x["last_updated"])):
@@ -1406,23 +1420,25 @@ with st.expander("Trade History", expanded=False):
                 if is_guest:
                     st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
                 else:
-                    for index, (row, item) in enumerate(zip(filtered_rows, filtered_records)):
-                        record = item["_record"]
-                        with st.container():
-                            details_col, edit_col = st.columns([8, 1])
-                            with details_col:
-                                st.write(
-                                    f"{row['TRADE DATE']} | {row['ACTION']} | {row['SYMBOL']} | "
-                                    f"Qty: {row['QTY']} | Price: ${row['PRICE']:,.2f}"
-                                )
-                            with edit_col:
-                                if st.button(
-                                    "Edit",
-                                    icon=":material/edit:",
-                                    key=f"edit_trade_{record.get('id') or index}",
-                                    help=_ledger_display_label(record),
-                                ):
-                                    _edit_trade_dialog(record)
+                    selection_key = "trade_selection_" + hashlib.sha256(
+                        json.dumps([user_id, filtered_records], sort_keys=True, default=str).encode("utf-8")
+                    ).hexdigest()[:16]
+                    trade_table = st.dataframe(
+                        filtered_rows,
+                        use_container_width=True,
+                        hide_index=True,
+                        on_select="rerun",
+                        selection_mode="single-row",
+                        key=selection_key,
+                    )
+                    selected_rows = trade_table["selection"]["rows"]
+                    st.caption("Select a trade row, then click Edit selected trade.")
+                    if st.button(
+                        "Edit selected trade",
+                        icon=":material/edit:",
+                        disabled=not selected_rows,
+                    ):
+                        _edit_trade_dialog(filtered_records[selected_rows[0]]["_record"])
                 csv_buffer = io.StringIO()
                 csv_writer = csv.DictWriter(csv_buffer, fieldnames=["TRADE DATE", "ACTION", "SYMBOL", "QTY", "PRICE"])
                 csv_writer.writeheader()
