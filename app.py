@@ -1,5 +1,6 @@
 from datetime import datetime
 import csv
+from decimal import Decimal, InvalidOperation
 import hashlib
 import json
 import io
@@ -313,6 +314,9 @@ def reset_market_session_state() -> None:
         "trade_history_edit_choice",
         "guest_portfolio",
         "guest_ledger",
+        "guest_cash_transactions",
+        "show_cash_history",
+        "cash_clear_notice",
     ]
     for key in keys_to_clear:
         st.session_state.pop(key, None)
@@ -916,6 +920,114 @@ def _parse_positive_float(value, field_name):
         return None, f"{field_name} must be a number greater than 0.00."
 
 
+@st.dialog("Edit trade")
+def _edit_trade_dialog(selected_trade):
+    user_id = st.session_state.user.id
+    st.caption(_ledger_display_label(selected_trade))
+    timestamp_text = str(selected_trade.get("timestamp", ""))
+    try:
+        trade_date = datetime.fromisoformat(timestamp_text).date()
+    except ValueError:
+        st.error("This trade has an invalid date. Correct its timestamp in the database before editing.")
+        return
+    with st.form("edit_trade_form"):
+        edit_date = st.date_input("Trade date", value=trade_date)
+        current_action = str(selected_trade.get("action", "")).upper()
+        edit_action = st.selectbox("Action", ["BUY", "SELL"], index=0 if current_action == "BUY" else 1)
+        edit_symbol = st.text_input("Symbol", value=str(selected_trade.get("symbol", ""))).strip().upper()
+        edit_qty = st.text_input("Quantity", value=str(int(selected_trade.get("quantity", 1) or 1)))
+        edit_price = st.text_input("Price", value=f"{float(selected_trade.get('price', 0.0) or 0.0):.2f}")
+        save_col, delete_col = st.columns(2)
+        with save_col:
+            save_trade = st.form_submit_button("Save Changes", use_container_width=True)
+        with delete_col:
+            delete_trade = st.form_submit_button("Delete Trade", use_container_width=True)
+
+    if save_trade or delete_trade:
+        try:
+            replacement = None
+            if save_trade:
+                if not edit_symbol:
+                    raise ValueError("Please enter a stock symbol.")
+                quantity, quantity_error = _parse_positive_int(edit_qty, "Quantity")
+                price, price_error = _parse_positive_float(edit_price, "Price")
+                if quantity_error or price_error:
+                    raise ValueError(quantity_error or price_error)
+                replacement = {
+                    "timestamp": edit_date.isoformat() + timestamp_text[10:],
+                    "action": edit_action,
+                    "symbol": edit_symbol,
+                    "quantity": quantity,
+                    "price": price,
+                }
+            proposed_ledger = _records_after_ledger_change(user_id, selected_trade, replacement)
+            validation_error = _validate_ledger_records(proposed_ledger)
+            if validation_error:
+                raise ValueError(validation_error)
+            if save_trade:
+                _update_ledger_record(selected_trade, replacement)
+            else:
+                _delete_ledger_record(selected_trade)
+            rebuild_portfolio_from_ledger(user_id)
+        except Exception as exc:
+            st.error(f"Failed to {'update' if save_trade else 'delete'} trade: {exc}")
+        else:
+            st.rerun()
+
+
+def _cash_amount_to_cents(value: str) -> int:
+    try:
+        amount = Decimal(value.strip())
+    except (InvalidOperation, ValueError, AttributeError) as exc:
+        raise ValueError("Enter a valid amount.") from exc
+    if not amount.is_finite() or amount <= 0:
+        raise ValueError("Amount must be greater than zero.")
+    cents = amount * 100
+    if cents != cents.to_integral_value():
+        raise ValueError("Amount must be in whole cents (up to two decimal places).")
+    return int(cents)
+
+
+def _cash_balance_cents(transactions: list[dict]) -> int:
+    return sum(
+        int(transaction["amount_cents"])
+        if transaction["transaction_type"] == "deposit"
+        else -int(transaction["amount_cents"])
+        for transaction in transactions
+    )
+
+
+def _load_cash_transactions(user_id: str) -> list[dict]:
+    transactions = []
+    page_size = 500
+    while True:
+        response = (
+            supabase.table("cash_transactions")
+            .select("transaction_type, amount_cents, timestamp, note")
+            .eq("user_id", user_id)
+            .order("timestamp", desc=True)
+            .order("id", desc=True)
+            .range(len(transactions), len(transactions) + page_size - 1)
+            .execute()
+        )
+        if response.data is None:
+            raise ValueError("The cash ledger returned no data. Refresh and try again.")
+        transactions.extend(response.data)
+        if len(response.data) < page_size:
+            return transactions
+
+
+def _record_cash_transaction(transaction_type: str, amount_cents: int, note: str) -> None:
+    supabase.rpc(
+        "record_cash_transaction",
+        {
+            "p_transaction_type": transaction_type,
+            "p_amount_cents": amount_cents,
+            "p_note": note,
+        },
+    ).execute()
+
+
 # Main App
 st.markdown(
     """
@@ -1012,6 +1124,120 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+with st.expander("Cash Ledger", expanded=False):
+    if st.session_state.pop("cash_clear_notice", False):
+        st.success("All cash transactions cleared. Your cash balance is now zero.")
+    cash_ready = True
+    if is_guest:
+        cash_transactions = st.session_state.setdefault("guest_cash_transactions", [])
+    else:
+        try:
+            cash_transactions = _load_cash_transactions(user_id)
+        except Exception as exc:
+            cash_ready = False
+            st.error(f"Unable to load cash transactions: {exc}")
+
+    if cash_ready:
+        cash_error = None
+        cash_message = None
+
+        with st.form("cash_transaction_form", clear_on_submit=True):
+            amount_col, note_col = st.columns(2)
+            with amount_col:
+                cash_amount = st.text_input("Amount ($)")
+            with note_col:
+                cash_note = st.text_input("Note (optional)")
+
+            deposit_col, withdrawal_col = st.columns(2)
+            with deposit_col:
+                submit_deposit = st.form_submit_button("Deposit", use_container_width=True)
+            with withdrawal_col:
+                submit_withdrawal = st.form_submit_button("Withdraw", use_container_width=True)
+
+        if submit_deposit or submit_withdrawal:
+            transaction_type = "deposit" if submit_deposit else "withdrawal"
+            try:
+                amount_cents = _cash_amount_to_cents(cash_amount)
+                note = cash_note.strip()
+                if is_guest:
+                    if transaction_type == "withdrawal" and amount_cents > _cash_balance_cents(cash_transactions):
+                        raise ValueError("Withdrawal exceeds the available cash balance.")
+                    cash_transactions.append(
+                        {
+                            "transaction_type": transaction_type,
+                            "amount_cents": amount_cents,
+                            "timestamp": datetime.now().isoformat(timespec="seconds"),
+                            "note": note,
+                        }
+                    )
+                    cash_message = f"{transaction_type.title()} recorded."
+                else:
+                    _record_cash_transaction(transaction_type, amount_cents, note)
+                    cash_message = f"{transaction_type.title()} recorded."
+            except ValueError as exc:
+                cash_error = str(exc)
+            except Exception as exc:
+                cash_error = f"Cash transaction could not be confirmed. Refresh before retrying: {exc}"
+
+            if not is_guest and cash_message:
+                try:
+                    cash_transactions = _load_cash_transactions(user_id)
+                except Exception as exc:
+                    cash_ready = False
+                    st.error(f"Transaction recorded, but cash history could not be refreshed: {exc}")
+
+        if cash_error:
+            st.error(cash_error)
+        if cash_message:
+            st.success(cash_message)
+
+        if cash_ready:
+            st.metric("Available cash", f"${_cash_balance_cents(cash_transactions) / 100:,.2f}")
+            if is_guest:
+                st.caption("Guest-mode entries are temporary and will be cleared when the session is reset.")
+            else:
+                st.caption("Saved to your account. Cash is separate from stock holdings and trade calculations.")
+            if st.toggle("Show transaction history", value=False, key="show_cash_history"):
+                st.markdown("#### Cash Transaction History")
+                if cash_transactions:
+                    with st.form("clear_cash_form", clear_on_submit=True):
+                        confirm_clear_cash = st.checkbox(
+                            "Confirm clear all cash transactions",
+                            help="Permanently deletes your cash deposits and withdrawals and resets cash to zero. Stock trades are not affected.",
+                        )
+                        clear_cash = st.form_submit_button("Clear all cash transactions")
+                    if clear_cash:
+                        if not confirm_clear_cash:
+                            st.warning("Confirm clear all cash transactions before continuing.")
+                        else:
+                            try:
+                                if is_guest:
+                                    st.session_state.guest_cash_transactions = []
+                                else:
+                                    supabase.rpc("clear_cash_transactions", {}).execute()
+                            except Exception as exc:
+                                st.error(f"Cash deletion could not be confirmed. Refresh before retrying: {exc}")
+                            else:
+                                st.session_state.cash_clear_notice = True
+                                st.rerun()
+                    ordered_cash = reversed(cash_transactions) if is_guest else cash_transactions
+                    cash_history_rows = []
+                    for transaction in ordered_cash:
+                        amount = int(transaction["amount_cents"]) / 100
+                        if transaction["transaction_type"] == "withdrawal":
+                            amount = -amount
+                        cash_history_rows.append(
+                            {
+                                "DATE / TIME": transaction["timestamp"].replace("T", " "),
+                                "TYPE": transaction["transaction_type"].title(),
+                                "AMOUNT": f"${amount:,.2f}",
+                                "NOTE": transaction["note"],
+                            }
+                        )
+                    st.dataframe(cash_history_rows, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No cash transactions recorded yet.")
+
 # Trade Form
 with st.form("trade_form", clear_on_submit=True):
     col1, col2, col3 = st.columns(3)
@@ -1052,25 +1278,25 @@ if submit_buy or submit_sell:
                 st.error(msg)
 
 # Holdings Display
-st.markdown("### Current Holdings")
-current_portfolio = load_portfolio()
-running_pl_by_symbol, running_total_pl = load_running_realized_pl()
+with st.expander("Current Holdings", expanded=False):
+    current_portfolio = load_portfolio()
+    running_pl_by_symbol, running_total_pl = load_running_realized_pl()
 
-st.metric("Running Realized P/L", f"${running_total_pl:,.2f}")
+    st.metric("Running Realized P/L", f"${running_total_pl:,.2f}")
 
-if current_portfolio:
-    display_rows = []
-    for lot in sorted(current_portfolio, key=lambda x: (x["symbol"], x["last_updated"])):
-        display_rows.append(
-            {
-                "SYMBOL": lot["symbol"],
-                "QTY": lot["quantity"],
-                "PRICE": round(lot["avg_price"], 2),
-            }
-        )
-    st.dataframe(display_rows, use_container_width=True, hide_index=True)
-else:
-    st.info("No active lots (Your portfolio is empty).")
+    if current_portfolio:
+        display_rows = []
+        for lot in sorted(current_portfolio, key=lambda x: (x["symbol"], x["last_updated"])):
+            display_rows.append(
+                {
+                    "SYMBOL": lot["symbol"],
+                    "QTY": lot["quantity"],
+                    "PRICE": round(lot["avg_price"], 2),
+                }
+            )
+        st.dataframe(display_rows, use_container_width=True, hide_index=True)
+    else:
+        st.info("No active lots (Your portfolio is empty).")
 
 st.markdown("### Trade History")
 with st.expander("Trade History", expanded=False):
@@ -1177,7 +1403,26 @@ with st.expander("Trade History", expanded=False):
 
             if filtered_rows:
                 st.caption(f"Showing {len(filtered_rows)} of {len(history_rows)} trades")
-                st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
+                if is_guest:
+                    st.dataframe(filtered_rows, use_container_width=True, hide_index=True)
+                else:
+                    for index, (row, item) in enumerate(zip(filtered_rows, filtered_records)):
+                        record = item["_record"]
+                        with st.container():
+                            details_col, edit_col = st.columns([8, 1])
+                            with details_col:
+                                st.write(
+                                    f"{row['TRADE DATE']} | {row['ACTION']} | {row['SYMBOL']} | "
+                                    f"Qty: {row['QTY']} | Price: ${row['PRICE']:,.2f}"
+                                )
+                            with edit_col:
+                                if st.button(
+                                    "Edit",
+                                    icon=":material/edit:",
+                                    key=f"edit_trade_{record.get('id') or index}",
+                                    help=_ledger_display_label(record),
+                                ):
+                                    _edit_trade_dialog(record)
                 csv_buffer = io.StringIO()
                 csv_writer = csv.DictWriter(csv_buffer, fieldnames=["TRADE DATE", "ACTION", "SYMBOL", "QTY", "PRICE"])
                 csv_writer.writeheader()
@@ -1193,100 +1438,24 @@ with st.expander("Trade History", expanded=False):
                 if is_guest:
                     st.caption("Guest mode: trade editing and deletion are disabled.")
                 else:
-                    with st.container():
-                        st.markdown("#### Edit Trade")
-                        trade_choice_map = {}
-                        trade_choices = []
-                        for idx, item in enumerate(filtered_records):
-                            record = item["_record"]
-                            record_id = record.get("id")
-                            if record_id:
-                                choice_key = f"id:{record_id}"
-                            else:
-                                choice_key = (
-                                    f"fallback:{idx}:{record.get('timestamp', '')}:{record.get('action', '')}:"
-                                    f"{record.get('symbol', '')}:{record.get('quantity', '')}:{record.get('price', '')}"
-                                )
-                            trade_choices.append(choice_key)
-                            trade_choice_map[choice_key] = record
-
-                        selected_trade_key = st.selectbox(
-                            "Choose trade",
-                            trade_choices,
-                            format_func=lambda choice: _ledger_display_label(trade_choice_map[choice]),
-                            key="trade_history_edit_choice",
+                    with st.form("delete_all_trades_form"):
+                        confirm_delete_all = st.checkbox(
+                            "Confirm delete all trades",
+                            value=False,
+                            help="This permanently removes your entire trade history and resets holdings.",
                         )
-                        selected_trade = trade_choice_map[selected_trade_key]
-
-                        with st.form("edit_trade_form"):
-                            current_action = str(selected_trade.get("action", "")).upper()
-                            action_index = 0 if current_action == "BUY" else 1
-                            edit_action = st.selectbox("Action", ["BUY", "SELL"], index=action_index)
-                            edit_symbol = st.text_input("Symbol", value=str(selected_trade.get("symbol", ""))).strip().upper()
-                            edit_qty = st.text_input("Quantity", value=str(int(selected_trade.get("quantity", 1) or 1)))
-                            edit_price = st.text_input("Price", value=f"{float(selected_trade.get('price', 0.0) or 0.0):.2f}")
-                            confirm_delete_all = st.checkbox(
-                                "Confirm delete all trades",
-                                value=False,
-                                help="This permanently removes your entire trade history and resets holdings.",
-                            )
-                            save_trade_col, delete_trade_col, delete_all_col = st.columns(3)
-                            with save_trade_col:
-                                save_trade_edit = st.form_submit_button("Save Changes", use_container_width=True)
-                            with delete_trade_col:
-                                delete_trade_edit = st.form_submit_button("Delete Trade", use_container_width=True)
-                            with delete_all_col:
-                                delete_all_trades = st.form_submit_button("Delete All", use_container_width=True)
-
-                        if save_trade_edit:
+                        delete_all_trades = st.form_submit_button("Delete All", use_container_width=True)
+                    if delete_all_trades:
+                        if not confirm_delete_all:
+                            st.warning("Enable 'Confirm delete all trades' before deleting everything.")
+                        else:
                             try:
-                                parsed_edit_qty, edit_qty_error = _parse_positive_int(edit_qty, "Quantity")
-                                parsed_edit_price, edit_price_error = _parse_positive_float(edit_price, "Price")
-                                if edit_qty_error:
-                                    raise ValueError(edit_qty_error)
-                                if edit_price_error:
-                                    raise ValueError(edit_price_error)
-                                updated_record = {
-                                    "action": edit_action,
-                                    "symbol": edit_symbol,
-                                    "quantity": parsed_edit_qty,
-                                    "price": parsed_edit_price,
-                                }
-                                proposed_ledger = _records_after_ledger_change(
-                                    user_id, selected_trade, updated_record
-                                )
-                                validation_error = _validate_ledger_records(proposed_ledger)
-                                if validation_error:
-                                    raise ValueError(validation_error)
-                                _update_ledger_record(selected_trade, updated_record)
+                                supabase.table("permanent_ledger").delete().eq("user_id", user_id).execute()
                                 rebuild_portfolio_from_ledger(user_id)
-                                st.success("Trade updated and portfolio recalculated.")
+                                st.success("All trades deleted and portfolio reset.")
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Failed to update trade: {str(e)}")
-                        elif delete_trade_edit:
-                            try:
-                                proposed_ledger = _records_after_ledger_change(user_id, selected_trade, None)
-                                validation_error = _validate_ledger_records(proposed_ledger)
-                                if validation_error:
-                                    raise ValueError(validation_error)
-                                _delete_ledger_record(selected_trade)
-                                rebuild_portfolio_from_ledger(user_id)
-                                st.success("Trade deleted and portfolio recalculated.")
-                                st.rerun()
-                            except Exception as e:
-                                st.error(f"Failed to delete trade: {str(e)}")
-                        elif delete_all_trades:
-                            if not confirm_delete_all:
-                                st.warning("Enable 'Confirm delete all trades' before deleting everything.")
-                            else:
-                                try:
-                                    supabase.table("permanent_ledger").delete().eq("user_id", user_id).execute()
-                                    rebuild_portfolio_from_ledger(user_id)
-                                    st.success("All trades deleted and portfolio reset.")
-                                    st.rerun()
-                                except Exception as e:
-                                    st.error(f"Failed to delete all trades: {str(e)}")
+                                st.error(f"Failed to delete all trades: {str(e)}")
             else:
                 st.caption("No trade history matches the current filters.")
         else:
