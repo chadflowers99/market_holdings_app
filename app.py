@@ -603,7 +603,7 @@ def delete_lot_from_db(symbol, last_updated, trace_id: str = "system"):
         return False
 
 
-def log_to_db(symbol, action, qty, price, avg_buy, trace_id: str = "system"):
+def log_to_db(symbol, action, qty, price, avg_buy, pl_value, trace_id: str = "system"):
     """Appends a permanent trade record to Supabase permanent_ledger."""
     if st.session_state.get("guest_mode"):
         if "guest_ledger" not in st.session_state:
@@ -618,7 +618,7 @@ def log_to_db(symbol, action, qty, price, avg_buy, trace_id: str = "system"):
                 "quantity": qty,
                 "price": price,
                 "avg_buy_price": avg_buy,
-                "realized_pl": 0.0,
+                "realized_pl": pl_value,
             }
         )
         return True
@@ -638,7 +638,7 @@ def log_to_db(symbol, action, qty, price, avg_buy, trace_id: str = "system"):
             "quantity": qty,
             "price": price,
             "avg_buy_price": avg_buy,
-            "realized_pl": 0.0,
+            "realized_pl": pl_value,
         }
 
         _trace_marker(
@@ -672,7 +672,7 @@ def handle_trade(action, symbol, quantity, price):
             "last_updated": now,
         }
         save_portfolio_row(new_lot, trace_id=trace_id)
-        log_to_db(symbol, "BUY", quantity, price, price, trace_id=trace_id)
+        log_to_db(symbol, "BUY", quantity, price, price, 0.0, trace_id=trace_id)
         _trace_marker(trace_id, "trade.handle", "done", "buy_complete")
         return True, f"Bought {quantity} shares of {symbol} @ ${price:.2f}."
 
@@ -686,13 +686,16 @@ def handle_trade(action, symbol, quantity, price):
         return False, f"Cannot sell {quantity} shares. You only own {total_qty} shares of {symbol}."
 
     remaining_to_sell = quantity
+    total_realized_pl = 0.0
 
     for lot in sorted(symbol_lots, key=lambda x: (x["avg_price"], x["last_updated"])):
         if remaining_to_sell <= 0:
             break
 
         consumed = min(lot["quantity"], remaining_to_sell)
-        log_to_db(symbol, "SELL", consumed, price, lot["avg_price"], trace_id=trace_id)
+        lot_realized_pl = (price - lot["avg_price"]) * consumed
+        total_realized_pl += lot_realized_pl
+        log_to_db(symbol, "SELL", consumed, price, lot["avg_price"], lot_realized_pl, trace_id=trace_id)
 
         # Save original timestamp before updating
         original_last_updated = lot["last_updated"]
@@ -707,7 +710,50 @@ def handle_trade(action, symbol, quantity, price):
         remaining_to_sell -= consumed
 
     _trace_marker(trace_id, "trade.handle", "done", "sell_complete")
-    return True, f"Sold {quantity} shares of {symbol}."
+    pl_status = "Profit" if total_realized_pl >= 0 else "Loss"
+    return True, f"Sold {quantity} shares of {symbol}. Realized {pl_status}: ${abs(total_realized_pl):.2f}."
+
+
+def _load_pl_ledger(user_id):
+    rows = []
+    while True:
+        response = (
+            supabase.table("permanent_ledger").select("*").eq("user_id", user_id)
+            .order("timestamp").order("id").range(len(rows), len(rows) + 499).execute()
+        )
+        if response.data is None:
+            raise ValueError("Trade history could not be loaded.")
+        rows.extend(response.data)
+        if len(response.data) < 500:
+            return rows
+
+
+def load_running_realized_pl():
+    if st.session_state.get("guest_mode"):
+        rows = st.session_state.get("guest_ledger", [])
+        baseline = st.session_state.get("guest_pl_baseline", 0)
+    else:
+        user_id = st.session_state.user.id
+        rows = _load_pl_ledger(user_id)
+        response = (
+            supabase.table("realized_pl_baselines").select("baseline")
+            .eq("user_id", user_id).execute()
+        )
+        if response.data is None:
+            raise ValueError("P/L reset baseline could not be loaded.")
+        baseline = response.data[0]["baseline"] if response.data else 0
+    total = sum(Decimal(str(row.get("realized_pl", 0) or 0)) for row in rows)
+    return total - Decimal(str(baseline))
+
+
+def reset_running_realized_pl():
+    if st.session_state.get("guest_mode"):
+        st.session_state.guest_pl_baseline = sum(
+            Decimal(str(row.get("realized_pl", 0) or 0))
+            for row in st.session_state.get("guest_ledger", [])
+        )
+    else:
+        supabase.rpc("reset_realized_pl_total", {}).execute()
 
 
 def _ledger_sort_key(record):
@@ -781,15 +827,15 @@ def _delete_ledger_record(record):
 
 
 def rebuild_portfolio_from_ledger(user_id):
-    """Replay the ledger to rebuild lots and purchase cost without calculating P/L."""
-    ledger_response = supabase.table("permanent_ledger").select("*").eq("user_id", user_id).execute()
-    ledger_rows = list(ledger_response.data or [])
+    """Replay each symbol's lowest-cost lots to recalculate realized P/L."""
+    ledger_rows = _load_pl_ledger(user_id)
     validation_error = _validate_ledger_records(ledger_rows)
     if validation_error:
         raise ValueError(validation_error)
     ledger_rows.sort(key=_ledger_sort_key)
 
     open_lots = []
+    ledger_updates = []
 
     for record in ledger_rows:
         action = str(record.get("action", "")).upper()
@@ -802,6 +848,7 @@ def rebuild_portfolio_from_ledger(user_id):
             continue
 
         if action == "BUY":
+            ledger_updates.append((record, {"avg_buy_price": price, "realized_pl": 0.0}))
             open_lots.append(
                 {
                     "symbol": symbol,
@@ -818,6 +865,7 @@ def rebuild_portfolio_from_ledger(user_id):
         remaining = quantity
         consumed_total = 0
         cost_basis_total = 0.0
+        realized_total = 0.0
 
         symbol_lots = [lot for lot in open_lots if lot["symbol"] == symbol]
         for lot in sorted(symbol_lots, key=lambda x: (x["avg_price"], x["last_updated"])):
@@ -826,6 +874,7 @@ def rebuild_portfolio_from_ledger(user_id):
 
             consumed = min(lot["quantity"], remaining)
             cost_basis_total += lot["avg_price"] * consumed
+            realized_total += (price - lot["avg_price"]) * consumed
             lot["quantity"] -= consumed
             remaining -= consumed
             consumed_total += consumed
@@ -833,16 +882,17 @@ def rebuild_portfolio_from_ledger(user_id):
         open_lots = [lot for lot in open_lots if lot["quantity"] > 0]
 
         avg_buy_price = cost_basis_total / consumed_total if consumed_total else price
-        _update_ledger_record(
-            record,
-            {
-                "avg_buy_price": avg_buy_price,
-            },
-        )
+        ledger_updates.append((record, {
+            "avg_buy_price": avg_buy_price,
+            "realized_pl": realized_total,
+        }))
 
+    for record, updates in ledger_updates:
+        _update_ledger_record(record, updates)
     supabase.table("portfolio").delete().eq("user_id", user_id).execute()
     for lot in open_lots:
-        save_portfolio_row(lot)
+        if not save_portfolio_row(lot):
+            raise RuntimeError("Unable to save rebuilt holdings. Refresh and retry the rebuild.")
 
 
 def _ledger_display_label(record):
@@ -1297,10 +1347,45 @@ if submit_buy or submit_sell:
 
 # Holdings Display
 with st.expander("Current Holdings", expanded=False):
+    if st.session_state.pop("pl_reset_notice", False):
+        st.success("P/L total reset. Trades, holdings, and cash were not changed.")
+    try:
+        running_total_pl = load_running_realized_pl()
+    except Exception as exc:
+        st.error(
+            "Unable to load realized P/L. Ensure the P/L reset migration "
+            f"(20261023_reset_realized_pl.sql) is installed: {exc}"
+        )
+    else:
+        st.metric("Running Realized P/L", f"${running_total_pl:,.2f}")
+        with st.form("reset_pl_form", clear_on_submit=True):
+            confirm_reset_pl = st.checkbox(
+                "Confirm reset P/L total",
+                help="Sets a new P/L baseline without changing trades, holdings, or cash.",
+            )
+            reset_pl = st.form_submit_button("Reset P/L total")
+        st.caption(
+            "Reset starts the displayed total at $0. Future gains/losses accumulate from there. "
+            "Editing or deleting older trades can still change this total."
+        )
+        if reset_pl:
+            if not confirm_reset_pl:
+                st.warning("Confirm reset P/L total before continuing.")
+            else:
+                try:
+                    reset_running_realized_pl()
+                except Exception as exc:
+                    st.error(f"P/L reset could not be confirmed. Refresh before retrying: {exc}")
+                else:
+                    st.session_state.pl_reset_notice = True
+                    st.rerun()
     current_portfolio = load_portfolio()
     if current_portfolio:
         display_rows = []
-        for lot in sorted(current_portfolio, key=lambda x: (x["symbol"], x["last_updated"])):
+        for lot in sorted(
+            current_portfolio,
+            key=lambda x: (x["symbol"], -x["avg_price"], x["last_updated"]),
+        ):
             display_rows.append(
                 {
                     "SYMBOL": lot["symbol"],

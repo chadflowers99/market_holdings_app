@@ -5,7 +5,8 @@ A multi-user Streamlit app for lot-level stock portfolio tracking with Supabase 
 ## Features
 
 - Lot-level holdings and sell tracking
-- Collapsed-by-default Current Holdings toggle for the lot tracking table
+- Collapsed-by-default Current Holdings toggle for lot tracking and realized P/L
+- Current Holdings groups symbols alphabetically and lists each symbol's lots by price, highest first
 - Permanent trade ledger
 - Select a Trade History row and use Edit selected trade to open its edit/delete dialog; confirmed Delete All remains separate
 - Trade dates can be edited while preserving time/timezone and validating buy/sell chronology
@@ -15,11 +16,18 @@ A multi-user Streamlit app for lot-level stock portfolio tracking with Supabase 
 
 ## Quick Start
 
-Local lot-only trial: realized P/L is not calculated or displayed. Existing
-historical P/L values are preserved; new ledger rows use zero for compatibility
-with the existing database schema. Lot quantities, purchase costs, and
-lowest-buy-first matching are retained. Signed-in local trades still write to
-the configured Supabase database, so this trial can affect the online app's data.
+Realized P/L uses lowest-buy-first matching separately for each symbol.
+**Current Holdings** displays running realized P/L. Editing/deleting trades
+recalculates P/L and rebuilds holdings; there is no standalone recalculation
+control. Signed-in local actions write to the configured Supabase database.
+**Reset P/L total** requires confirmation and saves the current realized total
+as an account-specific baseline. The displayed total starts at zero across
+devices; future realized gains/losses accumulate from there. No trades, holdings,
+or cash records are changed. Editing/deleting older trades can still change the
+displayed total because the baseline stays fixed. Guest resets are session-only.
+Apply `supabase/migrations/20261023_reset_realized_pl.sql` once in the Supabase
+SQL Editor before using this version. The migration creates the baseline table
+and reset function; it does not reset any totals or modify existing trades.
 
 1. Install dependencies:
 
@@ -80,6 +88,7 @@ All data syncs to Supabase PostgreSQL:
 - `portfolio`: Active holdings
 - `permanent_ledger`: Full trade history
 - `cash_transactions`: Per-user cash deposits and withdrawals protected by RLS
+- `realized_pl_baselines`: Per-user P/L reset baseline protected by RLS
 
 ## Streamlit Deployment Runbook
 

@@ -1,4 +1,5 @@
 import ast
+from copy import deepcopy
 from datetime import date
 from ipaddress import ip_address
 from pathlib import Path
@@ -55,6 +56,11 @@ class CashLedgerTests(unittest.TestCase):
         self.read_error = None
         self.client = Mock()
         self.trade_updates = []
+        self.portfolio_writes = []
+        self.portfolio_rows = []
+        self.pl_baselines = {}
+        self.pl_reset_error = None
+        self.pl_read_error = None
         self.client.table.side_effect = self.table
         self.client.rpc.side_effect = self.rpc
 
@@ -65,13 +71,36 @@ class CashLedgerTests(unittest.TestCase):
         query.select.return_value = query
 
         def execute():
+            if name == "realized_pl_baselines":
+                if self.pl_read_error:
+                    raise self.pl_read_error
+                user_id = next(call.args[1] for call in query.eq.call_args_list if call.args[0] == "user_id")
+                return SimpleNamespace(data=(
+                    [{"baseline": self.pl_baselines[user_id]}] if user_id in self.pl_baselines else []
+                ))
+            if name == "portfolio" and any(
+                getattr(query, method).called for method in ("insert", "update", "delete")
+            ):
+                self.portfolio_writes.append(query)
+            if name == "portfolio":
+                return SimpleNamespace(data=self.portfolio_rows)
             if name == "permanent_ledger":
                 if query.update.called:
                     updates = query.update.call_args.args[0]
                     record_id = next(call.args[1] for call in query.eq.call_args_list if call.args[0] == "id")
                     self.trade_updates.append((record_id, updates))
                     next(row for row in self.trades if row["id"] == record_id).update(updates)
-                return SimpleNamespace(data=self.trades)
+                rows = self.trades
+                user_id = next(
+                    (call.args[1] for call in query.eq.call_args_list if call.args[0] == "user_id"),
+                    None,
+                )
+                if user_id is not None:
+                    rows = [row for row in rows if row.get("user_id", user_id) == user_id]
+                if query.range.called:
+                    start, end = query.range.call_args.args
+                    rows = rows[start:end + 1]
+                return SimpleNamespace(data=rows)
             if name != "cash_transactions":
                 return SimpleNamespace(data=[])
             if self.read_error:
@@ -85,10 +114,21 @@ class CashLedgerTests(unittest.TestCase):
         return query
 
     def rpc(self, name, params):
-        self.assertIn(name, ("record_cash_transaction", "clear_cash_transactions", "change_cash_transaction"))
+        self.assertIn(name, (
+            "record_cash_transaction", "clear_cash_transactions",
+            "change_cash_transaction", "reset_realized_pl_total",
+        ))
         result = Mock()
 
         def execute():
+            if name == "reset_realized_pl_total":
+                if self.pl_reset_error:
+                    raise self.pl_reset_error
+                self.pl_baselines["alice"] = sum(
+                    row.get("realized_pl", 0) or 0 for row in self.trades
+                    if row.get("user_id") == "alice"
+                )
+                return SimpleNamespace(data=None)
             if name == "clear_cash_transactions":
                 self.rows[:] = [row for row in self.rows if row["user_id"] != "alice"]
                 return SimpleNamespace(data=None)
@@ -310,7 +350,7 @@ class CashLedgerTests(unittest.TestCase):
         self.assertFalse(app.exception)
         holdings = next(expander for expander in app.expander if expander.label == "Current Holdings")
         self.assertFalse(holdings.proto.expanded)
-        self.assertEqual(len(holdings.metric), 0)
+        self.assertEqual(holdings.metric[0].label, "Running Realized P/L")
         table = holdings.dataframe[0].value
         self.assertEqual(table.iloc[0]["SYMBOL"], "AAPL")
         self.assertEqual(table.iloc[0]["QTY"], 2)
@@ -318,7 +358,7 @@ class CashLedgerTests(unittest.TestCase):
         self.assertTrue(any(expander.label == "Cash Ledger" for expander in app.expander))
         self.assertTrue(any(expander.label == "Trade History" for expander in app.expander))
 
-    def test_guest_sale_tracks_lots_without_profit_calculation(self):
+    def test_guest_sale_tracks_lots_and_realized_profit(self):
         app = self.app(guest=True)
         app.session_state["guest_portfolio"] = [
             {"id": "low", "symbol": "MSFT", "quantity": 2, "avg_price": 100,
@@ -335,9 +375,9 @@ class CashLedgerTests(unittest.TestCase):
         self.assertEqual([(lot["quantity"], lot["avg_price"]) for lot in lots], [(2, 200)])
         ledger = app.session_state["guest_ledger"]
         self.assertEqual([row["quantity"] for row in ledger], [2, 1])
-        self.assertTrue(all(row["realized_pl"] == 0 for row in ledger))
-        self.assertTrue(any(message.value == "Sold 3 shares of MSFT." for message in app.success))
-        self.assertFalse(any("P/L" in metric.label for metric in app.metric))
+        self.assertEqual([row["realized_pl"] for row in ledger], [300, 50])
+        self.assertTrue(any("Realized Profit: $350.00" in message.value for message in app.success))
+        self.assertEqual(next(metric.value for metric in app.metric if metric.label == "Running Realized P/L"), "$350.00")
 
     def test_rebuild_preserves_historical_pl_and_other_symbol_lots(self):
         self.trades = [
@@ -351,7 +391,7 @@ class CashLedgerTests(unittest.TestCase):
         tree = ast.parse(APP_FILE.read_text(encoding="utf-8"))
         names = {
             "rebuild_portfolio_from_ledger", "_validate_ledger_records",
-            "_ledger_sort_key", "_update_ledger_record",
+            "_ledger_sort_key", "_update_ledger_record", "_load_pl_ledger",
         }
         functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
         save_lot = Mock()
@@ -362,7 +402,119 @@ class CashLedgerTests(unittest.TestCase):
         self.assertEqual([(lot["symbol"], lot["quantity"]) for lot in lots], [("AAPL", 4), ("MSFT", 2)])
         self.assertEqual(self.trades[2]["realized_pl"], 50)
         self.assertEqual(self.trades[2]["avg_buy_price"], 100)
-        self.assertTrue(all("realized_pl" not in updates for _, updates in self.trade_updates))
+        self.assertTrue(all("realized_pl" in updates for _, updates in self.trade_updates))
+
+    def test_pl_display_has_no_manual_recalculation_controls(self):
+        self.trades = [
+            {"id": "buy", "timestamp": "2026-10-19", "action": "BUY",
+             "symbol": "MSFT", "quantity": 3, "price": 100, "realized_pl": 0},
+            {"id": "sell", "timestamp": "2026-10-20", "action": "SELL",
+             "symbol": "MSFT", "quantity": 2, "price": 90, "realized_pl": 0},
+        ]
+        app = self.app()
+        self.assertFalse(any("Recalculate" in button.label for button in app.button))
+        self.assertFalse(any("recalculate" in field.label for field in app.checkbox))
+        self.assertEqual(next(metric.value for metric in app.metric if metric.label == "Running Realized P/L"), "$0.00")
+        self.assertEqual(self.trade_updates, [])
+        self.client.rpc.assert_not_called()
+        self.assertEqual(self.portfolio_writes, [])
+
+    def test_holdings_sort_by_symbol_then_descending_price(self):
+        self.portfolio_rows = [
+            {"symbol": symbol, "quantity": quantity, "avg_price": price, "last_updated": timestamp}
+            for symbol, quantity, price, timestamp in (
+                ("MSFT", 1, 90, "2026-10-20"),
+                ("AAPL", 2, 100, "2026-10-20"),
+                ("MSFT", 3, 200, "2026-10-19"),
+                ("AAPL", 4, 150, "2026-10-20"),
+                ("AAPL", 5, 150, "2026-10-19"),
+            )
+        ]
+        app = self.app()
+        holdings = next(expander for expander in app.expander if expander.label == "Current Holdings")
+        rows = holdings.dataframe[0].value.to_dict("records")
+        self.assertEqual(
+            [(row["SYMBOL"], row["PRICE"], row["QTY"]) for row in rows],
+            [("AAPL", 150, 5), ("AAPL", 150, 4), ("AAPL", 100, 2),
+             ("MSFT", 200, 3), ("MSFT", 90, 1)],
+        )
+        self.assertEqual(self.portfolio_writes, [])
+        self.assertEqual(self.trade_updates, [])
+
+    def test_pl_loads_all_ledger_pages(self):
+        self.trades = [
+            {"id": str(index), "timestamp": "2026-10-20", "action": "BUY",
+             "symbol": "MSFT", "quantity": 1, "price": 100, "realized_pl": 1}
+            for index in range(1001)
+        ]
+        app = self.app()
+        self.assertEqual(next(metric.value for metric in app.metric if metric.label == "Running Realized P/L"), "$1,001.00")
+
+    def pl_total(self, app):
+        return next(metric.value for metric in app.metric if metric.label == "Running Realized P/L")
+
+    def reset_pl(self, app):
+        next(field for field in app.checkbox if field.label == "Confirm reset P/L total").check()
+        next(button for button in app.button if button.label == "Reset P/L total").click().run()
+        self.assertFalse(app.exception)
+
+    def test_pl_reset_is_confirmed_persistent_and_does_not_change_records(self):
+        self.trades = [
+            {"id": "sale", "user_id": "alice", "realized_pl": 125.25},
+            {"id": "other-sale", "user_id": "bob", "realized_pl": 40},
+        ]
+        self.rows = [self.cash_row()]
+        original_trades, original_cash = deepcopy(self.trades), deepcopy(self.rows)
+        self.pl_baselines["bob"] = 30
+        app = self.app()
+        next(button for button in app.button if button.label == "Reset P/L total").click().run()
+        self.client.rpc.assert_not_called()
+        self.assertEqual(self.pl_total(app), "$125.25")
+        self.reset_pl(app)
+        self.assertEqual(self.pl_total(app), "$0.00")
+        self.assertEqual(self.trades, original_trades)
+        self.assertEqual(self.rows, original_cash)
+        self.assertEqual(self.trade_updates, [])
+        self.assertEqual(self.portfolio_writes, [])
+        self.assertEqual(self.pl_baselines["bob"], 30)
+        self.assertEqual(self.pl_total(self.app()), "$0.00")
+        self.trades.append({"id": "loss", "user_id": "alice", "realized_pl": -20.50})
+        app.run()
+        self.assertEqual(self.pl_total(app), "$-20.50")
+        self.reset_pl(app)
+        self.assertEqual(self.pl_total(app), "$0.00")
+        self.assertEqual(self.pl_total(self.app(user_id="bob")), "$10.00")
+
+    def test_guest_pl_reset_leaves_trades_and_makes_no_database_writes(self):
+        app = self.app(guest=True)
+        trades = [{"realized_pl": -12.25}]
+        app.session_state["guest_ledger"] = deepcopy(trades)
+        app.run()
+        self.reset_pl(app)
+        self.assertEqual(self.pl_total(app), "$0.00")
+        self.assertEqual(app.session_state["guest_ledger"], trades)
+        app.session_state["guest_ledger"] = trades + [{"realized_pl": 5.50}]
+        app.run()
+        self.assertEqual(self.pl_total(app), "$5.50")
+        self.client.rpc.assert_not_called()
+        self.assertEqual(self.portfolio_writes, [])
+
+    def test_pl_reset_failure_does_not_report_success(self):
+        self.trades = [{"id": "sale", "user_id": "alice", "realized_pl": 50}]
+        self.pl_reset_error = APIError({"message": "Reset unavailable", "code": "P0001"})
+        app = self.app()
+        self.reset_pl(app)
+        self.assertTrue(any("P/L reset could not be confirmed" in error.value for error in app.error))
+        self.assertFalse(any("P/L total reset." in notice.value for notice in app.success))
+        self.assertEqual(self.pl_total(app), "$50.00")
+        self.assertEqual(self.pl_baselines, {})
+
+    def test_pl_baseline_load_failure_is_explicit(self):
+        self.pl_read_error = APIError({"message": "Missing migration", "code": "PGRST205"})
+        app = self.app()
+        self.assertTrue(any("Unable to load realized P/L" in error.value for error in app.error))
+        self.assertFalse(any(metric.label == "Running Realized P/L" for metric in app.metric))
+        self.assertFalse(any(button.label == "Reset P/L total" for button in app.button))
 
     def test_transaction_history_is_displayed_inside_cash_toggle(self):
         self.rows = [{
